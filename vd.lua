@@ -648,7 +648,7 @@ local function TriggerOfficialParry(reason, distance, kHRP)
     end)
 
     task.spawn(function()
-        if VirtualInputManager then
+        if not UserInputService.TouchEnabled and VirtualInputManager then
             pcall(function()
                 local mPos = UserInputService:GetMouseLocation()
                 VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1)
@@ -1325,159 +1325,73 @@ local function ClearMobileControlHooks()
     isMobileADSHeld = false
 end
 
+local function ResolveButton(parent, name)
+    if not parent then return nil end
+    local item = parent:FindFirstChild(name) or parent:FindFirstChild(string.lower(name)) or parent:FindFirstChild(string.upper(string.sub(name, 1, 1)) .. string.sub(name, 2))
+    if item then
+        if item:IsA("GuiButton") or item:IsA("ImageButton") or item:IsA("TextButton") then
+            return item
+        end
+        local child = item:FindFirstChildOfClass("ImageButton") or item:FindFirstChildOfClass("TextButton") or item:FindFirstChildOfClass("GuiButton")
+        if child then return child end
+    end
+    for _, d in ipairs(parent:GetDescendants()) do
+        if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) and string.lower(d.Name) == string.lower(name) then
+            return d
+        end
+    end
+    return nil
+end
+
+local function HookButtonState(btn, onStateChange)
+    if not btn or not (btn:IsA("GuiButton") or btn:IsA("ImageButton") or btn:IsA("TextButton")) then return end
+    local down = btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            onStateChange(true)
+        end
+    end)
+    local up = btn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            onStateChange(false)
+        end
+    end)
+    table.insert(MobileControlsConns, down)
+    table.insert(MobileControlsConns, up)
+end
+
 local function HookMobileGui(gui)
     if not gui or not gui:IsA("ScreenGui") then return end
     local gNameLower = string.lower(gui.Name)
     
     -- 1. THE HIDDEN MOBILE (Hidden-mob.Controls.move2 -> Universal Aim)
     if string.find(gNameLower, "hidden") then
-        local controls = gui:FindFirstChild("Controls") or gui:FindFirstChild("Control")
-        if controls then
-            local move2Btn = controls:FindFirstChild("move2") or controls:FindFirstChild("Move2") or controls:FindFirstChild("m2")
-            if not move2Btn then
-                for _, d in ipairs(controls:GetDescendants()) do
-                    if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) and (string.lower(d.Name) == "move2" or string.lower(d.Name) == "m2") then
-                        move2Btn = d
-                        break
-                    end
-                end
-            end
-            if move2Btn and (move2Btn:IsA("GuiButton") or move2Btn:IsA("ImageButton") or move2Btn:IsA("TextButton")) then
-                local downConn = move2Btn.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        isMobileM2Held = true
-                    end
-                end)
-                local upConn = move2Btn.InputEnded:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        isMobileM2Held = false
-                    end
-                end)
-                table.insert(MobileControlsConns, downConn)
-                table.insert(MobileControlsConns, upConn)
-            end
+        local controls = gui:FindFirstChild("Controls") or gui:FindFirstChild("Control") or gui
+        local move2Btn = ResolveButton(controls, "move2") or ResolveButton(controls, "m2")
+        if move2Btn then
+            HookButtonState(move2Btn, function(pressed) isMobileM2Held = pressed end)
         end
     end
 
     -- 2. SLASHER MOBILE (Slasher-mob.Controls.move1 -> Universal Aim | Slasher-mob.Controls.attack -> Veil Aim)
     if string.find(gNameLower, "slasher") then
-        local controls = gui:FindFirstChild("Controls") or gui:FindFirstChild("Control")
-        if controls then
-            -- move1 -> Universal Aim
-            local move1Btn = controls:FindFirstChild("move1") or controls:FindFirstChild("Move1") or controls:FindFirstChild("m1")
-            if not move1Btn then
-                for _, d in ipairs(controls:GetDescendants()) do
-                    if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) and (string.lower(d.Name) == "move1" or string.lower(d.Name) == "m1") then
-                        move1Btn = d
-                        break
-                    end
-                end
-            end
-            if move1Btn and (move1Btn:IsA("GuiButton") or move1Btn:IsA("ImageButton") or move1Btn:IsA("TextButton")) then
-                local downConn = move1Btn.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        isMobileM2Held = true
-                    end
-                end)
-                local upConn = move1Btn.InputEnded:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        isMobileM2Held = false
-                    end
-                end)
-                table.insert(MobileControlsConns, downConn)
-                table.insert(MobileControlsConns, upConn)
-            end
+        local controls = gui:FindFirstChild("Controls") or gui:FindFirstChild("Control") or gui
+        local move1Btn = ResolveButton(controls, "move1") or ResolveButton(controls, "m1")
+        if move1Btn then
+            HookButtonState(move1Btn, function(pressed) isMobileM2Held = pressed end)
+        end
 
-            -- attack -> Veil Aim (Hold LMB)
-            local atkBtn = controls:FindFirstChild("attack") or controls:FindFirstChild("Attack")
-            if not atkBtn then
-                for _, d in ipairs(controls:GetDescendants()) do
-                    if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) and string.lower(d.Name) == "attack" then
-                        atkBtn = d
-                        break
-                    end
-                end
-            end
-            if atkBtn and (atkBtn:IsA("GuiButton") or atkBtn:IsA("ImageButton") or atkBtn:IsA("TextButton")) then
-                local downConn = atkBtn.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        isMobileLMBHeld = true
-                    end
-                end)
-                local upConn = atkBtn.InputEnded:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        isMobileLMBHeld = false
-                    end
-                end)
-                local mDown = atkBtn.MouseButton1Down:Connect(function()
-                    isMobileLMBHeld = true
-                end)
-                local mUp = atkBtn.MouseButton1Up:Connect(function()
-                    isMobileLMBHeld = false
-                end)
-                table.insert(MobileControlsConns, downConn)
-                table.insert(MobileControlsConns, upConn)
-                table.insert(MobileControlsConns, mDown)
-                table.insert(MobileControlsConns, mUp)
-            end
+        local atkBtn = ResolveButton(controls, "attack")
+        if atkBtn then
+            HookButtonState(atkBtn, function(pressed) isMobileLMBHeld = pressed end)
         end
     end
 
-    -- 3. SURVIVOR MOBILE (Survivor-mob.Control['Gui-mob'] -> Twist of Fate Aim & Release to Shoot)
+    -- 3. SURVIVOR MOBILE (Survivor-mob.Control['Gui-mob'] -> Twist of Fate Aim)
     if string.find(gNameLower, "survivor") or string.find(gNameLower, "gui-mob") then
-        local control = gui:FindFirstChild("Control") or gui:FindFirstChild("Controls")
-        local guiMobBtn = control and (control:FindFirstChild("Gui-mob") or control:FindFirstChild("gui-mob"))
-        if not guiMobBtn then
-            for _, d in ipairs(gui:GetDescendants()) do
-                if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) and (string.lower(d.Name) == "gui-mob" or string.lower(d.Name) == "dagger") then
-                    guiMobBtn = d
-                    break
-                end
-            end
-        end
-        if guiMobBtn and not (guiMobBtn:IsA("GuiButton") or guiMobBtn:IsA("ImageButton") or guiMobBtn:IsA("TextButton")) then
-            local childBtn = guiMobBtn:FindFirstChildOfClass("ImageButton") or guiMobBtn:FindFirstChildOfClass("TextButton") or guiMobBtn:FindFirstChildOfClass("GuiButton")
-            if childBtn then guiMobBtn = childBtn end
-        end
-        if guiMobBtn and (guiMobBtn:IsA("GuiButton") or guiMobBtn:IsA("ImageButton") or guiMobBtn:IsA("TextButton")) then
-            local downConn = guiMobBtn.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                    isMobileADSHeld = true
-                end
-            end)
-            local upConn = guiMobBtn.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                    isMobileADSHeld = false
-
-                    -- Jika sedang pegang Twist of Fate: pas dilepas langsung tembak!
-                    local tool = FindEquippedTool()
-                    if tool then
-                        local tName = string.lower(tool.Name)
-                        if string.find(tName, "twist") or string.find(tName, "fate") or string.find(tName, "gun") or string.find(tName, "pistol") then
-                            task.spawn(function()
-                                local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-                                if VirtualInputManager then
-                                    pcall(function()
-                                        VirtualInputManager:SendMouseButtonEvent(screenCenter.X, screenCenter.Y, 0, true, game, 1)
-                                        task.wait(0.03)
-                                        VirtualInputManager:SendMouseButtonEvent(screenCenter.X, screenCenter.Y, 0, false, game, 1)
-                                    end)
-                                end
-                                pcall(function()
-                                    if mouse1click then
-                                        mouse1click()
-                                    end
-                                end)
-                                if tool and tool:IsA("Tool") then
-                                    pcall(function() tool:Activate() end)
-                                end
-                            end)
-                        end
-                    end
-                end
-            end)
-            table.insert(MobileControlsConns, downConn)
-            table.insert(MobileControlsConns, upConn)
+        local controls = gui:FindFirstChild("Control") or gui:FindFirstChild("Controls") or gui
+        local guiMobBtn = ResolveButton(controls, "Gui-mob") or ResolveButton(controls, "gui-mob") or ResolveButton(controls, "dagger")
+        if guiMobBtn then
+            HookButtonState(guiMobBtn, function(pressed) isMobileADSHeld = pressed end)
         end
     end
 end
@@ -1571,14 +1485,26 @@ local function ProcessAutoAim(deltaTime)
         return
     end
     
-    local isMobileDevice = UserInputService.TouchEnabled and (not UserInputService.KeyboardEnabled or not UserInputService.MouseEnabled)
-    local isLMBNow = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-    local isRMBPressed = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    local isMobileDevice = UserInputService.TouchEnabled
     
-    -- Isolasi Input: Pada Mobile, aimbot HANYA aktif saat tombol GUI terkait ditekan (bukan saat swipe/geser layar)
-    local isVeilAimActive = isMobileDevice and isMobileLMBHeld or (isLMBNow or isMobileLMBHeld)
-    local isUnivAimActive = isMobileDevice and isMobileM2Held or (isRMBPressed or isMobileM2Held)
-    local isSurvivorAimActive = isMobileDevice and isMobileADSHeld or (isRMBPressed or isMobileADSHeld)
+    local isVeilAimActive = false
+    local isUnivAimActive = false
+    local isSurvivorAimActive = false
+    
+    if isMobileDevice then
+        -- DI MOBILE: HANYA aktif saat tombol GUI terkait benar-benar ditahan!
+        -- Menggeser layar kosong / joystick TIDAK AKAN PERNAH memicu aimbot!
+        isVeilAimActive = isMobileLMBHeld
+        isUnivAimActive = isMobileM2Held
+        isSurvivorAimActive = isMobileADSHeld
+    else
+        -- DI PC: Menggunakan klik mouse (LMB untuk Veil, RMB untuk Universal & Survivor)
+        local isLMBNow = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        local isRMBPressed = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        isVeilAimActive = isLMBNow or isMobileLMBHeld
+        isUnivAimActive = isRMBPressed or isMobileM2Held
+        isSurvivorAimActive = isRMBPressed or isMobileADSHeld
+    end
     
     local amIKiller = (GetPlayerRole(LocalPlayer) == "KILLER")
     local tool = FindEquippedTool()
@@ -1822,7 +1748,7 @@ local crosshairConnection = RunService.RenderStepped:Connect(function()
     end
     
     CrosshairDot.Visible = true
-    local isMobileDevice = UserInputService.TouchEnabled and (not UserInputService.KeyboardEnabled or not UserInputService.MouseEnabled)
+    local isMobileDevice = UserInputService.TouchEnabled
     local isAiming = false
     if isMobileDevice then
         isAiming = isMobileLMBHeld or isMobileM2Held or isMobileADSHeld
