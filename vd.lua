@@ -23,7 +23,7 @@ _G.ModeTerang = false
 _G.FullbrightBrightness = 2.0
 _G.CameraFOV = 70.0
 _G.AutoParry = false
-_G.ParryMaxDistance = 12.5
+_G.ParryMaxDistance = 11
 _G.MaxFacingAngleDot = 0.20
 _G.MinWeaponSwingSpeed = 8.0
 _G.ParryDaggerInGameCooldown = 60.0
@@ -1373,7 +1373,11 @@ local function ClearMobileControlHooks()
     end
     table.clear(MobileControlsConns)
     isMobileM2Held = false
- local function HookMobileGui(gui)
+    isMobileLMBHeld = false
+    isMobileADSHeld = false
+end
+
+local function HookMobileGui(gui)
     if not gui or not gui:IsA("ScreenGui") then return end
     local gNameLower = string.lower(gui.Name)
     
