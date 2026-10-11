@@ -23,7 +23,7 @@ _G.ModeTerang = false
 _G.FullbrightBrightness = 2.0
 _G.CameraFOV = 70.0
 _G.AutoParry = false
-_G.ParryMaxDistance = 11
+_G.ParryMaxDistance = 12.5
 _G.MaxFacingAngleDot = 0.20
 _G.MinWeaponSwingSpeed = 8.0
 _G.ParryDaggerInGameCooldown = 60.0
@@ -338,72 +338,7 @@ pcall(function()
     end
 end)
 
--- auto gene logic
-local lastTriggerTime = 0
-local function TriggerPerfectHit()
-    local now = tick()
-    if now - lastTriggerTime < 0.22 then return end
-    lastTriggerTime = now
 
-    if VirtualInputManager then
-        pcall(function()
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-            task.wait(0.02)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-        end)
-    end
-    pcall(function()
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        local mech = remotes and remotes:FindFirstChild("Mechanics")
-        local scRemote = mech and (mech:FindFirstChild("SkillCheck") or mech:FindFirstChild("skillcheck") or mech:FindFirstChild("SkillCheckResult"))
-        if scRemote and scRemote:IsA("RemoteEvent") then
-            scRemote:FireServer(true, "Great")
-        end
-    end)
-end
-
-local lastHitTick = 0
-local skillCheckLoopConn = RunService.RenderStepped:Connect(function()
-    if not ScriptRunning or not _G.AutoSkillCheck then return end
-    
-    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not playerGui then return end
-    
-    local gui = playerGui:FindFirstChild("SkillCheckPromptGui")
-    if not gui then
-        for _, child in pairs(playerGui:GetChildren()) do
-            if child:IsA("ScreenGui") and child.Enabled and string.find(string.lower(child.Name), "skill") then
-                gui = child
-                break
-            end
-        end
-    end
-    
-    if gui and gui.Enabled then
-        local check = gui:FindFirstChild("Check")
-        if check and check.Visible then
-            local line = check:FindFirstChild("Line")
-            local goal = check:FindFirstChild("Goal")
-            
-            if line and goal and line.Visible and goal.Visible then
-                local now = tick()
-                if now - lastHitTick >= 0.22 then
-                    local lineRot = line.Rotation % 360
-                    local goalRot = goal.Rotation % 360
-                    
-                    local targetAngle = (goalRot + 120) % 360
-                    local diff = math.abs((lineRot - targetAngle + 180) % 360 - 180)
-                    
-                    if diff <= 14 then
-                        lastHitTick = now
-                        TriggerPerfectHit()
-                    end
-                end
-            end
-        end
-    end
-end)
-table.insert(Connections, skillCheckLoopConn)
 
 local function IsLocalPlayerBusy()
     local myChar = LocalPlayer.Character
@@ -1245,10 +1180,19 @@ local function FindEquippedTool()
         for _, child in pairs(character:GetChildren()) do
             if child:IsA("Tool") or child:IsA("Model") then
                 local cName = string.lower(child.Name)
-                if string.find(cName, "twist") or string.find(cName, "spear") or string.find(cName, "weapon") or 
-                   string.find(cName, "veil") or string.find(cName, "hidden") or string.find(cName, "blade") or 
-                   string.find(cName, "scythe") or string.find(cName, "sword") or string.find(cName, "gun") then
+                if string.find(cName, "twist") or string.find(cName, "fate") or string.find(cName, "spear") or 
+                   string.find(cName, "weapon") or string.find(cName, "veil") or string.find(cName, "hidden") or 
+                   string.find(cName, "blade") or string.find(cName, "scythe") or string.find(cName, "sword") or 
+                   string.find(cName, "gun") or string.find(cName, "pistol") then
                     return child
+                end
+            end
+        end
+        for _, desc in pairs(character:GetDescendants()) do
+            if desc:IsA("Tool") or (desc:IsA("Model") and desc.Parent == character) then
+                local dName = string.lower(desc.Name)
+                if string.find(dName, "twist") or string.find(dName, "fate") then
+                    return desc
                 end
             end
         end
@@ -1297,10 +1241,15 @@ end
 local function GetBestTarget(isVeilMode, ignoreFOV)
     local bestTarget, bestPart = nil, nil
     local bestScore = math.huge
-    local mousePos = UserInputService:GetMouseLocation()
     local cameraPos = Camera.CFrame.Position
     local amIKiller = (GetPlayerRole(LocalPlayer) == "KILLER")
     local candidates = {}
+    
+    -- Titik acuan bidikan (Pada Mobile / saat tombol ADS/M2 ditekan, gunakan titik tengah layar / crosshair)
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local mousePos = UserInputService:GetMouseLocation()
+    local isMobileDevice = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+    local aimReferencePoint = (isMobileDevice or isMobileADSHeld or isMobileM2Held) and screenCenter or mousePos
     
     if not amIKiller then
         local scpSearchList = {}
@@ -1345,9 +1294,9 @@ local function GetBestTarget(isVeilMode, ignoreFOV)
         local screenPos, onScreen = Camera:WorldToViewportPoint(targetPos)
         if onScreen then
             local screenVec = Vector2.new(screenPos.X, screenPos.Y)
-            local mouseDist = (screenVec - mousePos).Magnitude
+            local mouseDist = (screenVec - aimReferencePoint).Magnitude
             
-            local passesFOV = ignoreFOV or (mouseDist <= _G.AutoAimFOV)
+            local passesFOV = ignoreFOV or (mouseDist <= (_G.AutoAimFOV or 250))
             if passesFOV and IsTargetVisible(aimPart, candidate.character, ignoreWall) then
                 local score = mouseDist + ((aimPart.Position - cameraPos).Magnitude * 0.25)
                 if score < bestScore then
@@ -1485,6 +1434,10 @@ local function HookMobileGui(gui)
                 end
             end
         end
+        if guiMobBtn and not (guiMobBtn:IsA("GuiButton") or guiMobBtn:IsA("ImageButton") or guiMobBtn:IsA("TextButton")) then
+            local childBtn = guiMobBtn:FindFirstChildOfClass("ImageButton") or guiMobBtn:FindFirstChildOfClass("TextButton") or guiMobBtn:FindFirstChildOfClass("GuiButton")
+            if childBtn then guiMobBtn = childBtn end
+        end
         if guiMobBtn and (guiMobBtn:IsA("GuiButton") or guiMobBtn:IsA("ImageButton") or guiMobBtn:IsA("TextButton")) then
             local downConn = guiMobBtn.InputBegan:Connect(function(input)
                 if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1495,24 +1448,26 @@ local function HookMobileGui(gui)
                 if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
                     isMobileADSHeld = false
 
-                    -- Jika sedang pegang Twist of Fate dan Aimbot aktif: pas dilepas langsung tembak!
+                    -- Jika sedang pegang Twist of Fate: pas dilepas langsung tembak!
                     local tool = FindEquippedTool()
-                    local isTwistOfFate = tool and (string.find(string.lower(tool.Name), "twist") or string.find(string.lower(tool.Name), "fate") or string.find(string.lower(tool.Name), "revolver") or string.find(string.lower(tool.Name), "gun"))
-                    if isTwistOfFate and AutoAimEnabled then
-                        task.spawn(function()
-                            if VirtualInputManager then
-                                pcall(function()
-                                    local mPos = UserInputService:GetMouseLocation()
-                                    VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, true, game, 1)
-                                    task.wait(0.03)
-                                    VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, false, game, 1)
-                                end)
-                            end
-                            if tool and tool:IsA("Tool") then
-                                pcall(function() tool:Activate() end)
+                    task.spawn(function()
+                        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        if VirtualInputManager then
+                            pcall(function()
+                                VirtualInputManager:SendMouseButtonEvent(screenCenter.X, screenCenter.Y, 0, true, game, 1)
+                                task.wait(0.03)
+                                VirtualInputManager:SendMouseButtonEvent(screenCenter.X, screenCenter.Y, 0, false, game, 1)
+                            end)
+                        end
+                        pcall(function()
+                            if mouse1click then
+                                mouse1click()
                             end
                         end)
-                    end
+                        if tool and tool:IsA("Tool") then
+                            pcall(function() tool:Activate() end)
+                        end
+                    end)
                 end
             end)
             table.insert(MobileControlsConns, downConn)
@@ -1530,14 +1485,49 @@ local function ScanAllPlayerGuis()
 end
 
 task.spawn(function()
-    local pGui = LocalPlayer:WaitForChild("PlayerGui", 5)
+    local pGui = LocalPlayer:WaitForChild("PlayerGui", 10)
     if pGui then
         ScanAllPlayerGuis()
         local pGuiChildAdded = pGui.ChildAdded:Connect(function(child)
-            task.wait(0.1)
+            task.wait(0.15)
             HookMobileGui(child)
         end)
         table.insert(Connections, pGuiChildAdded)
+
+        local pGuiDescAdded = pGui.DescendantAdded:Connect(function(desc)
+            if desc:IsA("GuiButton") or desc:IsA("ImageButton") or desc:IsA("TextButton") then
+                local dName = string.lower(desc.Name)
+                if dName == "gui-mob" or dName == "move2" or dName == "move1" or dName == "attack" or dName == "action" then
+                    task.wait(0.15)
+                    local rootScreen = desc:FindFirstAncestorOfClass("ScreenGui")
+                    if rootScreen then HookMobileGui(rootScreen) end
+                end
+            end
+        end)
+        table.insert(Connections, pGuiDescAdded)
+    end
+end)
+
+local charAddedConn = LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1.0)
+    ClearMobileControlHooks()
+    ScanAllPlayerGuis()
+end)
+table.insert(Connections, charAddedConn)
+
+-- Self-healing Mobile Control Scanner (Setiap 2 detik memastikan kontrol mobile ter-hook jika masuk match dari lobby)
+task.spawn(function()
+    while ScriptRunning do
+        pcall(function()
+            local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+            if pGui then
+                local hasMobGui = pGui:FindFirstChild("Survivor-mob") or pGui:FindFirstChild("Hidden-mob") or pGui:FindFirstChild("Slasher-mob")
+                if hasMobGui and #MobileControlsConns == 0 then
+                    ScanAllPlayerGuis()
+                end
+            end
+        end)
+        task.wait(2)
     end
 end)
 
@@ -1626,9 +1616,9 @@ local function ProcessAutoAim(deltaTime)
         end
     end
 
-    -- aimbot twist of fate (Survivor Aim Pistol - PC: RMB / Mobile: ADS Button)
-    if AutoAimEnabled and tool and (isRMBPressed or isMobileADSHeld) then
-        local targetChar, targetPart = GetBestTarget(false)
+    -- aimbot twist of fate (Survivor Aim Pistol - PC: RMB / Mobile: Gui-mob ADS Button)
+    if (AutoAimEnabled or isMobileADSHeld) and (isRMBPressed or isMobileADSHeld) then
+        local targetChar, targetPart = GetBestTarget(false, isMobileADSHeld)
         if targetPart then
             CurrentTarget = targetChar
             local cameraPos = Camera.CFrame.Position
@@ -1654,7 +1644,7 @@ local function ProcessAutoAim(deltaTime)
 end
 
 -- =========================================================================
--- 🎯 AUTO SKILLCHECK GREAT (GENERATOR AUTOMATION)
+-- 🎯 AUTO SKILLCHECK GREAT (GENERATOR AUTOMATION - ZERO LAG OPTIMIZED)
 -- PC: Spacebar | Mobile: Survivor-mob.Control.action Button
 -- =========================================================================
 local lastSkillCheckHit = 0
@@ -1669,25 +1659,34 @@ local function ProcessAutoSkillCheck()
     
     local line = scGui:FindFirstChild("Line", true)
     local goal = scGui:FindFirstChild("Goal", true)
+    if not line or not goal or not line.Visible or not goal.Visible then return end
     
-    if line and goal and line.Visible and goal.Visible then
-        local now = tick()
-        if now - lastSkillCheckHit < 0.4 then return end
+    -- Pastikan UI SkillCheck benar-benar aktif di layar (bukan tersembunyi / posisi di luar layar)
+    if line.AbsoluteSize.X <= 5 or line.AbsolutePosition.X <= 0 or line.AbsolutePosition.Y <= 0 then return end
+    
+    local now = tick()
+    if now - lastSkillCheckHit < 0.5 then return end
+    
+    local lineRot = line.Rotation % 360
+    local goalRot = goal.Rotation % 360
+    
+    -- Hitung selisih sudut baik langsung maupun dengan offset texture 120 derajat
+    local targetAngle = (goalRot + 120) % 360
+    local diff1 = math.abs((lineRot - targetAngle + 180) % 360 - 180)
+    local diff2 = math.abs((lineRot - goalRot + 180) % 360 - 180)
+    local diff = math.min(diff1, diff2)
+    
+    -- Toleransi zona Great / Perfect (selisih <= 15 derajat)
+    if diff <= 15 then
+        lastSkillCheckHit = now
         
-        local lineRot = line.Rotation % 360
-        local goalRot = goal.Rotation % 360
-        local diff = math.abs(lineRot - goalRot)
-        if diff > 180 then diff = 360 - diff end
-        
-        -- Toleransi zona Great / Perfect (selisih <= 12 derajat)
-        if diff <= 12 then
-            lastSkillCheckHit = now
-            
+        -- Jalankan di background thread terpisah agar TIDAK MENSTALL thread render FPS (ZERO LAG)
+        task.spawn(function()
             -- 1. Simulasi Tombol Space di PC
             if VirtualInputManager then
                 pcall(function()
                     VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-                    task.wait(0.02)
+                    task.wait(0.03)
                     VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
                 end)
             end
@@ -1721,15 +1720,15 @@ local function ProcessAutoSkillCheck()
             -- 3. Backup Remote Generator
             pcall(function()
                 local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                local genFolder = remotes and remotes:FindFirstChild("Generator")
+                local genFolder = remotes and (remotes:FindFirstChild("Generator") or remotes:FindFirstChild("Mechanics"))
                 if genFolder then
-                    local resEvent = genFolder:FindFirstChild("SkillCheckResultEvent") or genFolder:FindFirstChild("Skillcheckvalidated")
+                    local resEvent = genFolder:FindFirstChild("SkillCheckResultEvent") or genFolder:FindFirstChild("Skillcheckvalidated") or genFolder:FindFirstChild("SkillCheck")
                     if resEvent and resEvent:IsA("RemoteEvent") then
-                        resEvent:FireServer(true)
+                        resEvent:FireServer(true, "Great")
                     end
                 end
             end)
-        end
+        end)
     end
 end
 
