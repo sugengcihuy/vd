@@ -205,6 +205,12 @@ local SCPConnections = {}
 local CurrentTarget = nil
 local LockedTarget = nil
 local LockedPart = nil
+local VeilLockedTarget = nil
+local VeilLockedPart = nil
+local UniversalLockedTarget = nil
+local UniversalLockedPart = nil
+local SurvivorLockedTarget = nil
+local SurvivorLockedPart = nil
 local WindowInstance = nil
 
 local lmbHoldStartTime = 0
@@ -323,13 +329,7 @@ local function ApplyModeTerangInGame()
     end)
 end
 
--- lightning clean
-local modeTerangHeartbeatConn = RunService.Heartbeat:Connect(function()
-    if ScriptRunning and _G.ModeTerang then
-        ApplyModeTerangInGame()
-    end
-end)
-table.insert(Connections, modeTerangHeartbeatConn)
+-- Mode Terang dijalankan saat toggle dan di interval background (hemat CPU & baterai)
 
 -- Camera FOV Enforcement (Dikelola dalam satu Main RenderStepped Loop untuk efisiensi CPU)
 
@@ -1024,12 +1024,6 @@ local function IsSCP(character)
 
     if not isSCPName then return false end
 
-    -- ESP zombie logic
-    if not IsMoving(character, aimPart) then
-        ClearSCPData(character)
-        return false
-    end
-
     KnownSCPs[character] = true
     if not SCPConnections[character] then
         SCPConnections[character] = {}
@@ -1039,7 +1033,10 @@ local function IsSCP(character)
         end))
         table.insert(SCPConnections[character], character.AttributeChanged:Connect(function(attr)
             if attr == "CorpseCreated0492" or attr == "HighlightReadyAt" or attr == "IsDead" then
-                if not IsSCP(character) then ClearSCPData(character) end
+                local h = character:FindFirstChildOfClass("Humanoid")
+                if not h or h.Health <= 0 or character:GetAttribute("IsDead") == true then
+                    ClearSCPData(character)
+                end
             end
         end))
         table.insert(SCPConnections[character], character.AncestryChanged:Connect(function(_, parent)
@@ -1177,23 +1174,32 @@ local function RefreshAllESP()
     
     for _, child in ipairs(workspace:GetChildren()) do
         if child:IsA("Model") and IsSCP(child) then
-            if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
-            elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
+            local aimPart = GetAimPart(child)
+            if IsMoving(child, aimPart) then
+                if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
+                elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
+            end
         end
     end
 
     for scpModel, _ in pairs(KnownSCPs) do
         if scpModel and scpModel.Parent and scpModel:IsA("Model") and IsSCP(scpModel) then
-            if not amIKiller and ShowEnemies then validTargets[scpModel] = _G.SCPColor
-            elseif amIKiller and ShowFriends then validTargets[scpModel] = _G.SCPColor end
+            local aimPart = GetAimPart(scpModel)
+            if IsMoving(scpModel, aimPart) then
+                if not amIKiller and ShowEnemies then validTargets[scpModel] = _G.SCPColor
+                elseif amIKiller and ShowFriends then validTargets[scpModel] = _G.SCPColor end
+            end
         end
     end
 
     if workspace:FindFirstChild("1") then
         for _, child in ipairs(workspace["1"]:GetChildren()) do
             if child:IsA("Model") and IsSCP(child) then
-                if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
-                elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
+                local aimPart = GetAimPart(child)
+                if IsMoving(child, aimPart) then
+                    if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
+                    elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
+                end
             end
         end
     end
@@ -1202,8 +1208,21 @@ local function RefreshAllESP()
     if mapFolder then
         for _, child in ipairs(mapFolder:GetChildren()) do
             if child:IsA("Model") and IsSCP(child) then
-                if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
-                elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
+                local aimPart = GetAimPart(child)
+                if IsMoving(child, aimPart) then
+                    if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
+                    elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
+                end
+            elseif child:IsA("Folder") or child:IsA("Configuration") or child:IsA("Model") then
+                for _, subChild in ipairs(child:GetChildren()) do
+                    if subChild:IsA("Model") and IsSCP(subChild) then
+                        local aimPart = GetAimPart(subChild)
+                        if IsMoving(subChild, aimPart) then
+                            if not amIKiller and ShowEnemies then validTargets[subChild] = _G.SCPColor
+                            elseif amIKiller and ShowFriends then validTargets[subChild] = _G.SCPColor end
+                        end
+                    end
+                end
             end
         end
     end
@@ -1277,12 +1296,14 @@ local function IsTargetVisible(targetPart, character, ignoreWallCheck)
     
     local raycastParams = RaycastParams.new()
     raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    
     local ignoreList = {LocalPlayer.Character, Holder}
     if character then table.insert(ignoreList, character) end
     raycastParams.FilterDescendantsInstances = ignoreList
     raycastParams.IgnoreWater = true
     
-    return workspace:Raycast(cameraPos, direction, raycastParams) == nil
+    local result = workspace:Raycast(cameraPos, direction, raycastParams)
+    return result == nil
 end
 
 local function GetTargetVelocity(character, part)
@@ -1474,9 +1495,29 @@ task.spawn(function()
     end
 end)
 
+local function CleanupDuplicateInGameUI()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then return end
+    local seen = {}
+    for _, child in ipairs(pGui:GetChildren()) do
+        if child:IsA("ScreenGui") then
+            local nameLower = string.lower(child.Name)
+            if string.find(nameLower, "windui") or string.find(nameLower, "syshub") or nameLower == "crosshairgui" then
+                -- ignore script ui
+            elseif seen[nameLower] then
+                pcall(function() child:Destroy() end)
+            else
+                seen[nameLower] = child
+            end
+        end
+    end
+end
+
 local charAddedConn = LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1.0)
     ClearMobileControlHooks()
+    CleanupDuplicateInGameUI()
+    task.wait(0.5)
+    CleanupDuplicateInGameUI()
     ScanAllPlayerGuis()
 end)
 table.insert(Connections, charAddedConn)
@@ -1537,6 +1578,10 @@ local function ProcessAutoAim(deltaTime)
         if LockedPart then LockedPart = nil end
         if VeilLockedTarget then VeilLockedTarget = nil end
         if VeilLockedPart then VeilLockedPart = nil end
+        if UniversalLockedTarget then UniversalLockedTarget = nil end
+        if UniversalLockedPart then UniversalLockedPart = nil end
+        if SurvivorLockedTarget then SurvivorLockedTarget = nil end
+        if SurvivorLockedPart then SurvivorLockedPart = nil end
         return
     end
 
@@ -1620,8 +1665,14 @@ local function ProcessAutoAim(deltaTime)
     
     -- 2. UNIVERSAL AIMBOT (Hold RMB di PC / Hold move2/move1 di Mobile)
     if UniversalAimEnabled and isUnivAimActive then
-        local targetChar, targetPart = GetBestTarget(false, true)
-        if targetPart then
+        if not UniversalLockedTarget or not UniversalLockedPart or not IsValidStandingTarget(UniversalLockedTarget) then
+            local targetChar, targetPart = GetBestTarget(false, true)
+            UniversalLockedTarget = targetChar
+            UniversalLockedPart = targetPart
+        end
+
+        local targetChar, targetPart = UniversalLockedTarget, UniversalLockedPart
+        if targetPart and targetChar then
             CurrentTarget = targetChar
             local cameraPos = Camera.CFrame.Position
             local distToTarget = (targetPart.Position - cameraPos).Magnitude
@@ -1643,12 +1694,21 @@ local function ProcessAutoAim(deltaTime)
             Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
             return
         end
+    else
+        UniversalLockedTarget = nil
+        UniversalLockedPart = nil
     end
 
     -- 3. TWIST OF FATE (PISTOL) AIMBOT (Hold RMB di PC / Hold Gui-mob di Mobile)
     if AutoAimEnabled and tool and isSurvivorAimActive then
-        local targetChar, targetPart = GetBestTarget(false, isMobileADSHeld)
-        if targetPart then
+        if not SurvivorLockedTarget or not SurvivorLockedPart or not IsValidStandingTarget(SurvivorLockedTarget) then
+            local targetChar, targetPart = GetBestTarget(false, isMobileADSHeld)
+            SurvivorLockedTarget = targetChar
+            SurvivorLockedPart = targetPart
+        end
+
+        local targetChar, targetPart = SurvivorLockedTarget, SurvivorLockedPart
+        if targetPart and targetChar then
             CurrentTarget = targetChar
             local cameraPos = Camera.CFrame.Position
             local distToTarget = (targetPart.Position - cameraPos).Magnitude
@@ -1670,6 +1730,9 @@ local function ProcessAutoAim(deltaTime)
             
             Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
         end
+    else
+        SurvivorLockedTarget = nil
+        SurvivorLockedPart = nil
     end
 end
 
@@ -2248,8 +2311,8 @@ local function CreateUI()
     end
 
     UIControls.WallCheck = aimSection:Toggle({
-        Title = "Wall Check [L]",
-        Desc = "Hanya mengunci target yang terlihat (tidak terhalang dinding)",
+        Title = "Wall Check (Tembus Tembok) [L]",
+        Desc = "OFF = Tembus Tembok (Lock di balik dinding) | ON = Hanya Musuh yang Kelihatan",
         Value = _G.WallCheck,
         Callback = function(state)
             _G.WallCheck = state
@@ -2465,11 +2528,59 @@ local wsDescConn = workspace.DescendantAdded:Connect(function(desc)
         local name = string.lower(desc.Name)
         if string.find(name, "scp") or string.find(name, "zombie") or string.find(name, "infected") or string.find(name, "049-2") then
             task.wait(0.2)
+            IsSCP(desc)
             RefreshAllESP()
         end
     end
 end)
 table.insert(Connections, wsDescConn)
+
+-- Remote Killers Listener (Menangkap spawn SCP zombie seperti di backup sugeng)
+pcall(function()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local killers = remotes:FindFirstChild("Killers")
+        if killers then
+            for _, desc in pairs(killers:GetDescendants()) do
+                if desc:IsA("RemoteEvent") then
+                    local rConn = desc.OnClientEvent:Connect(function(arg1, ...)
+                        if typeof(arg1) == "Instance" and arg1:IsA("Model") then
+                            IsSCP(arg1)
+                        end
+                        task.delay(0.1, function() RefreshAllESP() end)
+                    end)
+                    table.insert(Connections, rConn)
+                end
+            end
+        end
+    end
+end)
+
+-- Deteksi Teleportasi / Masuk Match dari Lobby (Cek ringan per 1 detik, bukan per frame Heartbeat)
+task.spawn(function()
+    local lastHrpPos = nil
+    while ScriptRunning do
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+                if hrp then
+                    if lastHrpPos then
+                        local dist = (hrp.Position - lastHrpPos).Magnitude
+                        if dist > 35 then
+                            ClearAllESPData()
+                            task.wait(0.2)
+                            RefreshAllESP()
+                            CleanupDuplicateInGameUI()
+                        end
+                    end
+                    lastHrpPos = hrp.Position
+                end
+            end
+        end)
+        task.wait(1.0)
+    end
+end)
 
 local keyInputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not ScriptRunning or gameProcessed then return end
