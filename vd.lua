@@ -1084,6 +1084,12 @@ local function CreateHighlight(target, color)
             existing.FillColor = color
             existing.OutlineColor = color
         end
+        if existing.FillTransparency ~= 0.65 then
+            existing.FillTransparency = 0.65
+        end
+        if existing.OutlineTransparency ~= 0 then
+            existing.OutlineTransparency = 0
+        end
         return
     end
     
@@ -1091,9 +1097,9 @@ local function CreateHighlight(target, color)
     highlight.Name = "ESP_Highlight"
     highlight.Adornee = target
     highlight.FillColor = color
-    highlight.FillTransparency = 1
+    highlight.FillTransparency = 0.65
     highlight.OutlineColor = color
-    highlight.OutlineTransparency = 0.1
+    highlight.OutlineTransparency = 0
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Parent = target
     ActiveHighlights[target] = highlight
@@ -1140,9 +1146,9 @@ local function RefreshGeneratorESP()
                 hl.Name = "Gen_Highlight"
                 hl.Adornee = descendant
                 hl.FillColor = _G.GenColor
-                hl.FillTransparency = 1
+                hl.FillTransparency = 0.75
                 hl.OutlineColor = _G.GenColor
-                hl.OutlineTransparency = 0.1
+                hl.OutlineTransparency = 0
                 hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                 hl.Parent = descendant
                 GenHighlights[descendant] = hl
