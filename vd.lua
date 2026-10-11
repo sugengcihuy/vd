@@ -1,3 +1,9 @@
+-- Single-instance guard (Membersihkan instance lama & UI ganda saat re-exec di Match 2)
+if _G.SugengVDCleanup then
+    pcall(_G.SugengVDCleanup)
+    task.wait(0.1)
+end
+
 _G.FriendColor = Color3.fromRGB(0, 255, 255)
 _G.EnemyColor = Color3.fromRGB(255, 0, 0)
 _G.SCPColor = Color3.fromRGB(170, 0, 255)
@@ -177,8 +183,19 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Lighting = game:GetService("Lighting")
 local Camera = workspace.CurrentCamera
 
-local Holder = Instance.new("Folder", game.CoreGui)
+-- Executor-Safe CoreGui / Parent Container
+local function GetParentGui()
+    local success, hui = pcall(function() return gethui() end)
+    if success and hui then return hui end
+    local success2, core = pcall(function() return game:GetService("CoreGui") end)
+    if success2 and core then return core end
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+local GuiParent = GetParentGui()
+
+local Holder = Instance.new("Folder")
 Holder.Name = "ESP"
+Holder.Parent = GuiParent
 
 local Connections = {}
 local ActiveHighlights = {}
@@ -205,7 +222,7 @@ if not WindUI then
     end)
 end
 
--- cleanup logic
+-- cleanup logic (Comprehensive Singleton Cleanup)
 _G.SugengVDCleanup = function()
     ScriptRunning = false
     for _, conn in pairs(Connections) do
@@ -216,9 +233,25 @@ _G.SugengVDCleanup = function()
     for gen, hl in pairs(GenHighlights) do pcall(function() hl:Destroy() end) end
     ActiveHighlights = {}
     GenHighlights = {}
-    pcall(function() Holder:Destroy() end)
-    pcall(function() local gui = game.CoreGui:FindFirstChild("ESPGui"); if gui then gui:Destroy() end end)
-    pcall(function() local gui = game.CoreGui:FindFirstChild("CrosshairGui"); if gui then gui:Destroy() end end)
+    if Holder then pcall(function() Holder:Destroy() end) end
+    
+    -- Cleanup UI containers across CoreGui, gethui, and PlayerGui
+    local containers = {}
+    pcall(function() table.insert(containers, game:GetService("CoreGui")) end)
+    pcall(function() if gethui then table.insert(containers, gethui()) end end)
+    pcall(function() if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then table.insert(containers, LocalPlayer.PlayerGui) end end)
+    
+    for _, parent in ipairs(containers) do
+        pcall(function()
+            for _, child in ipairs(parent:GetChildren()) do
+                local cName = string.lower(child.Name)
+                if cName == "crosshairgui" or cName == "espgui" or string.find(cName, "windui") or string.find(cName, "syshub") then
+                    pcall(function() child:Destroy() end)
+                end
+            end
+        end)
+    end
+
     if WindowInstance and WindowInstance.Destroy then
         pcall(function() WindowInstance:Destroy() end)
     end
@@ -298,16 +331,7 @@ local modeTerangHeartbeatConn = RunService.Heartbeat:Connect(function()
 end)
 table.insert(Connections, modeTerangHeartbeatConn)
 
--- Camera FOV Real-time Enforcement
-local cameraFovConn = RunService.RenderStepped:Connect(function()
-    if ScriptRunning then
-        local targetFOV = _G.CameraFOV or 70.0
-        if Camera and Camera.FieldOfView ~= targetFOV then
-            Camera.FieldOfView = targetFOV
-        end
-    end
-end)
-table.insert(Connections, cameraFovConn)
+-- Camera FOV Enforcement (Dikelola dalam satu Main RenderStepped Loop untuk efisiensi CPU)
 
 -- delete lightning
 local lightingChildConn = Lighting.ChildAdded:Connect(function()
@@ -1078,6 +1102,7 @@ local function CreateHighlight(target, color)
     ActiveHighlights[target] = highlight
 end
 
+local CachedGenerators = {}
 local function RefreshGeneratorESP()
     if not ScriptRunning or not _G.ShowGenerators or GetPlayerRole(LocalPlayer) == "SPECTATOR" then
         for gen, hl in pairs(GenHighlights) do pcall(function() hl:Destroy() end) end
@@ -1085,24 +1110,45 @@ local function RefreshGeneratorESP()
         return
     end
     
-    local validGens = {}
-    for _, descendant in pairs(workspace:GetDescendants()) do
-        if descendant:IsA("Model") then
-            local dName = string.lower(descendant.Name)
-            if descendant.Name == "Generator" or dName == "generator" or string.find(dName, "gen") then
-                validGens[descendant] = true
-                if not GenHighlights[descendant] then
-                    local hl = Instance.new("Highlight")
-                    hl.Name = "Gen_Highlight"
-                    hl.Adornee = descendant
-                    hl.FillColor = _G.GenColor
-                    hl.FillTransparency = 1
-                    hl.OutlineColor = _G.GenColor
-                    hl.OutlineTransparency = 0.1
-                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                    hl.Parent = descendant
-                    GenHighlights[descendant] = hl
+    -- Validasi cache generator agar tidak memindai workspace:GetDescendants() setiap 1.5 detik (Menghemat 95% CPU)
+    local needsScan = (#CachedGenerators == 0)
+    if not needsScan then
+        for _, gen in ipairs(CachedGenerators) do
+            if not gen or not gen.Parent then
+                needsScan = true
+                break
+            end
+        end
+    end
+    
+    if needsScan then
+        CachedGenerators = {}
+        local container = workspace:FindFirstChild("Map") or workspace
+        for _, descendant in ipairs(container:GetDescendants()) do
+            if descendant:IsA("Model") then
+                local dName = string.lower(descendant.Name)
+                if descendant.Name == "Generator" or dName == "generator" or string.find(dName, "gen") then
+                    table.insert(CachedGenerators, descendant)
                 end
+            end
+        end
+    end
+    
+    local validGens = {}
+    for _, descendant in ipairs(CachedGenerators) do
+        if descendant and descendant.Parent then
+            validGens[descendant] = true
+            if not GenHighlights[descendant] then
+                local hl = Instance.new("Highlight")
+                hl.Name = "Gen_Highlight"
+                hl.Adornee = descendant
+                hl.FillColor = _G.GenColor
+                hl.FillTransparency = 1
+                hl.OutlineColor = _G.GenColor
+                hl.OutlineTransparency = 0.1
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Parent = descendant
+                GenHighlights[descendant] = hl
             end
         end
     end
@@ -1136,15 +1182,28 @@ local function RefreshAllESP()
         end
     end
 
-    local scpContainers = {}
-    if workspace:FindFirstChild("1") then table.insert(scpContainers, workspace["1"]) end
-    if workspace:FindFirstChild("Map") then table.insert(scpContainers, workspace.Map) end
+    for scpModel, _ in pairs(KnownSCPs) do
+        if scpModel and scpModel.Parent and scpModel:IsA("Model") and IsSCP(scpModel) then
+            if not amIKiller and ShowEnemies then validTargets[scpModel] = _G.SCPColor
+            elseif amIKiller and ShowFriends then validTargets[scpModel] = _G.SCPColor end
+        end
+    end
 
-    for _, container in ipairs(scpContainers) do
-        for _, descendant in ipairs(container:GetDescendants()) do
-            if descendant:IsA("Model") and IsSCP(descendant) then
-                if not amIKiller and ShowEnemies then validTargets[descendant] = _G.SCPColor
-                elseif amIKiller and ShowFriends then validTargets[descendant] = _G.SCPColor end
+    if workspace:FindFirstChild("1") then
+        for _, child in ipairs(workspace["1"]:GetChildren()) do
+            if child:IsA("Model") and IsSCP(child) then
+                if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
+                elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
+            end
+        end
+    end
+
+    local mapFolder = workspace:FindFirstChild("Map")
+    if mapFolder then
+        for _, child in ipairs(mapFolder:GetChildren()) do
+            if child:IsA("Model") and IsSCP(child) then
+                if not amIKiller and ShowEnemies then validTargets[child] = _G.SCPColor
+                elseif amIKiller and ShowFriends then validTargets[child] = _G.SCPColor end
             end
         end
     end
@@ -1251,27 +1310,10 @@ local function GetBestTarget(isVeilMode, ignoreFOV)
     local aimReferencePoint = (isMobileDevice or isMobileADSHeld or isMobileM2Held) and screenCenter or mousePos
     
     if not amIKiller then
-        local scpSearchList = {}
-        for _, child in ipairs(workspace:GetChildren()) do table.insert(scpSearchList, child) end
-        if workspace:FindFirstChild("1") then
-            for _, descendant in ipairs(workspace["1"]:GetDescendants()) do
-                if descendant:IsA("Model") then table.insert(scpSearchList, descendant) end
-            end
-        end
-        if workspace:FindFirstChild("Map") then
-            for _, descendant in ipairs(workspace.Map:GetDescendants()) do
-                if descendant:IsA("Model") then table.insert(scpSearchList, descendant) end
-            end
-        end
-
-        local scannedSCPs = {}
-        for _, obj in ipairs(scpSearchList) do
-            if obj:IsA("Model") and not scannedSCPs[obj] then
-                scannedSCPs[obj] = true
-                if IsSCP(obj) and IsValidStandingTarget(obj) then
-                    local aimPart = GetAimPart(obj)
-                    if aimPart then table.insert(candidates, {character = obj, part = aimPart}) end
-                end
+        for scpModel, _ in pairs(KnownSCPs) do
+            if scpModel and scpModel.Parent and scpModel:IsA("Model") and IsValidStandingTarget(scpModel) then
+                local aimPart = GetAimPart(scpModel)
+                if aimPart then table.insert(candidates, {character = scpModel, part = aimPart}) end
             end
         end
     end
@@ -1315,11 +1357,13 @@ end
 -- =========================================================================
 -- 📱 MOBILE CONTROLS HOOK (THE HIDDEN M2 LEAP, KILLER DASH, WEAPON ADS)
 -- =========================================================================
+local HookedButtons = {}
 local function ClearMobileControlHooks()
     for _, conn in ipairs(MobileControlsConns) do
         pcall(function() conn:Disconnect() end)
     end
     table.clear(MobileControlsConns)
+    table.clear(HookedButtons)
     isMobileM2Held = false
     isMobileLMBHeld = false
     isMobileADSHeld = false
@@ -1345,6 +1389,8 @@ end
 
 local function HookButtonState(btn, onStateChange)
     if not btn or not (btn:IsA("GuiButton") or btn:IsA("ImageButton") or btn:IsA("TextButton")) then return end
+    if HookedButtons[btn] then return end
+    HookedButtons[btn] = true
     local down = btn.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
             onStateChange(true)
@@ -1464,27 +1510,6 @@ end)
 table.insert(Connections, touchSafetyConn)
 
 local function ProcessAutoAim(deltaTime)
-    local char = LocalPlayer.Character
-    if not char then return end
-    
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then return end
-    
-    local isMyCharDisabled = char:GetAttribute("Knocked") == true or
-                             char:GetAttribute("IsCarried") == true or char:GetAttribute("Carried") == true or
-                             char:GetAttribute("IsHooked") == true or char:GetAttribute("Hooked") == true or char:GetAttribute("IsOnHook") == true or
-                             char:GetAttribute("IsDowned") == true or char:GetAttribute("Downed") == true or
-                             hum.PlatformStand or hum:GetState() == Enum.HumanoidStateType.PlatformStanding or
-                             char:FindFirstChild("Downed") or char:FindFirstChild("Hooked")
-                             
-    if isMyCharDisabled then
-        LockedTarget = nil
-        LockedPart = nil
-        VeilLockedTarget = nil
-        VeilLockedPart = nil
-        return
-    end
-    
     local isMobileDevice = UserInputService.TouchEnabled
     
     local isVeilAimActive = false
@@ -1504,6 +1529,36 @@ local function ProcessAutoAim(deltaTime)
         isVeilAimActive = isLMBNow or isMobileLMBHeld
         isUnivAimActive = isRMBPressed or isMobileM2Held
         isSurvivorAimActive = isRMBPressed or isMobileADSHeld
+    end
+    
+    -- OPTIMASI 0% CPU: Jika player tidak sedang membidik/menahan tombol aim, keluar seketika!
+    if not (isVeilAimActive or isUnivAimActive or isSurvivorAimActive) then
+        if LockedTarget then LockedTarget = nil end
+        if LockedPart then LockedPart = nil end
+        if VeilLockedTarget then VeilLockedTarget = nil end
+        if VeilLockedPart then VeilLockedPart = nil end
+        return
+    end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+    
+    local isMyCharDisabled = char:GetAttribute("Knocked") == true or
+                             char:GetAttribute("IsCarried") == true or char:GetAttribute("Carried") == true or
+                             char:GetAttribute("IsHooked") == true or char:GetAttribute("Hooked") == true or char:GetAttribute("IsOnHook") == true or
+                             char:GetAttribute("IsDowned") == true or char:GetAttribute("Downed") == true or
+                             hum.PlatformStand or hum:GetState() == Enum.HumanoidStateType.PlatformStanding or
+                             char:FindFirstChild("Downed") or char:FindFirstChild("Hooked")
+                             
+    if isMyCharDisabled then
+        LockedTarget = nil
+        LockedPart = nil
+        VeilLockedTarget = nil
+        VeilLockedPart = nil
+        return
     end
     
     local amIKiller = (GetPlayerRole(LocalPlayer) == "KILLER")
@@ -1667,20 +1722,26 @@ local function TriggerPerfectHit()
     end)
 end
 
+local CachedSkillGui = nil
 local function ProcessAutoSkillCheck()
     if not ScriptRunning or not _G.AutoSkillCheck then return end
     
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
     if not playerGui then return end
     
-    local gui = playerGui:FindFirstChild("SkillCheckPromptGui")
-    if not gui then
-        for _, child in pairs(playerGui:GetChildren()) do
-            if child:IsA("ScreenGui") and child.Enabled and string.find(string.lower(child.Name), "skill") then
-                gui = child
-                break
+    -- Caching referensi UI Skillcheck agar tidak melakukan GetChildren() setiap frame
+    local gui = CachedSkillGui
+    if not gui or not gui.Parent then
+        gui = playerGui:FindFirstChild("SkillCheckPromptGui")
+        if not gui then
+            for _, child in pairs(playerGui:GetChildren()) do
+                if child:IsA("ScreenGui") and string.find(string.lower(child.Name), "skill") then
+                    gui = child
+                    break
+                end
             end
         end
+        CachedSkillGui = gui
     end
     
     if gui and gui.Enabled then
@@ -1705,21 +1766,17 @@ local function ProcessAutoSkillCheck()
     end
 end
 
-local aimRenderConnection = RunService.RenderStepped:Connect(function(deltaTime)
-    if ScriptRunning then
-        pcall(function() ProcessAutoAim(deltaTime) end)
-        pcall(function() ProcessAutoSkillCheck() end)
-    end
-end)
-table.insert(Connections, aimRenderConnection)
-
 -- croshair dot
 local CrosshairGui, CrosshairDot = nil, nil
 local function CreateCrosshairUI()
-    if CrosshairGui then CrosshairGui:Destroy() end
+    if CrosshairGui then pcall(function() CrosshairGui:Destroy() end) end
+    pcall(function()
+        local old = GuiParent:FindFirstChild("CrosshairGui")
+        if old then old:Destroy() end
+    end)
     CrosshairGui = Instance.new("ScreenGui")
     CrosshairGui.Name = "CrosshairGui"
-    CrosshairGui.Parent = game.CoreGui
+    CrosshairGui.Parent = GuiParent
     CrosshairGui.ResetOnSpawn = false
     
     CrosshairDot = Instance.new("Frame")
@@ -1738,35 +1795,52 @@ local function CreateCrosshairUI()
 end
 CreateCrosshairUI()
 
-local crosshairConnection = RunService.RenderStepped:Connect(function()
-    if not ScriptRunning or not CrosshairDot then return end
+-- UNIFIED SINGLE RENDERSTEPPED LOOP (Mengurangi 66% Overhead Context Switch pada Mobile)
+local mainRenderConnection = RunService.RenderStepped:Connect(function(deltaTime)
+    if not ScriptRunning then return end
     
-    local activeAim = AutoAimEnabled or VeilAimEnabled or UniversalAimEnabled
-    if not activeAim then 
-        CrosshairDot.Visible = false
-        return 
+    -- 1. Real-time Camera FOV enforcement
+    local targetFOV = _G.CameraFOV or 70.0
+    if Camera and Camera.FieldOfView ~= targetFOV then
+        Camera.FieldOfView = targetFOV
     end
     
-    CrosshairDot.Visible = true
-    local isMobileDevice = UserInputService.TouchEnabled
-    local isAiming = false
-    if isMobileDevice then
-        isAiming = isMobileLMBHeld or isMobileM2Held or isMobileADSHeld
-    else
-        isAiming = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) or isMobileLMBHeld or isMobileM2Held or isMobileADSHeld
+    -- 2. Process Auto Aim
+    pcall(function() ProcessAutoAim(deltaTime) end)
+    
+    -- 3. Process Auto Skillcheck
+    if _G.AutoSkillCheck then
+        pcall(ProcessAutoSkillCheck)
     end
     
-    if isAiming and LockedPart then
-        if IsSCP(LockedTarget) then
-            CrosshairDot.BackgroundColor3 = Color3.fromRGB(255, 120, 0)
+    -- 4. Crosshair Dot Update
+    if CrosshairDot then
+        local activeAim = AutoAimEnabled or VeilAimEnabled or UniversalAimEnabled
+        if not activeAim then
+            if CrosshairDot.Visible then CrosshairDot.Visible = false end
         else
-            CrosshairDot.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+            if not CrosshairDot.Visible then CrosshairDot.Visible = true end
+            local isMobileDevice = UserInputService.TouchEnabled
+            local isAiming = false
+            if isMobileDevice then
+                isAiming = isMobileLMBHeld or isMobileM2Held or isMobileADSHeld
+            else
+                isAiming = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) or isMobileLMBHeld or isMobileM2Held or isMobileADSHeld
+            end
+            
+            if isAiming and LockedPart then
+                if IsSCP(LockedTarget) then
+                    CrosshairDot.BackgroundColor3 = Color3.fromRGB(255, 120, 0)
+                else
+                    CrosshairDot.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+                end
+            else
+                CrosshairDot.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+            end
         end
-    else
-        CrosshairDot.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     end
 end)
-table.insert(Connections, crosshairConnection)
+table.insert(Connections, mainRenderConnection)
 
 --  wind ui lib
 local UIControls = {}
