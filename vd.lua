@@ -3,10 +3,7 @@ _G.EnemyColor = Color3.fromRGB(255, 0, 0)
 _G.SCPColor = Color3.fromRGB(170, 0, 255)
 _G.GenColor = Color3.fromRGB(255, 220, 0)
 _G.AimPart = "Torso"
-_G.BaseOffset = 0.45
-_G.SurvivorOffset = 0.50
-_G.UniversalOffset = 1.25
-_G.VeilOffset = 0.60
+_G.BaseOffset = 0.2
 _G.WeaponModelName = "Twist of Fate"
 _G.AutoAimSmoothness = 0.25
 _G.FiringSmoothness = 0.95
@@ -1410,8 +1407,16 @@ local function HookMobileGui(gui)
                         isMobileLMBHeld = false
                     end
                 end)
+                local mDown = atkBtn.MouseButton1Down:Connect(function()
+                    isMobileLMBHeld = true
+                end)
+                local mUp = atkBtn.MouseButton1Up:Connect(function()
+                    isMobileLMBHeld = false
+                end)
                 table.insert(MobileControlsConns, downConn)
                 table.insert(MobileControlsConns, upConn)
+                table.insert(MobileControlsConns, mDown)
+                table.insert(MobileControlsConns, mUp)
             end
         end
     end
@@ -1531,114 +1536,205 @@ task.spawn(function()
     end
 end)
 
+local touchSafetyConn = UserInputService.TouchEnded:Connect(function()
+    task.defer(function()
+        local touches = UserInputService:GetTouches()
+        if #touches == 0 then
+            isMobileLMBHeld = false
+            isMobileM2Held = false
+            isMobileADSHeld = false
+        end
+    end)
+end)
+table.insert(Connections, touchSafetyConn)
+
+local function FireTwistOfFateRemote(tool, directionVector)
+    pcall(function()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if remotes then
+            local items = remotes:FindFirstChild("Items")
+            if items then
+                local twistFolder = items:FindFirstChild("Twist of Fate")
+                if twistFolder then
+                    local fireEvent = twistFolder:FindFirstChild("Fire")
+                    if fireEvent and fireEvent:IsA("RemoteEvent") then
+                        fireEvent:FireServer(tool, directionVector)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function FireVeilSpearRemote(directionVector, spearSpeed, originPos)
+    pcall(function()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if remotes then
+            local killers = remotes:FindFirstChild("Killers")
+            if killers then
+                local veilFolder = killers:FindFirstChild("Veil")
+                if veilFolder then
+                    local spearRemote = veilFolder:FindFirstChild("Spearthrow")
+                    if spearRemote and spearRemote:IsA("RemoteEvent") then
+                        spearRemote:FireServer(directionVector, spearSpeed, originPos)
+                    end
+                end
+            end
+        end
+    end)
+end
+
 local function ProcessAutoAim(deltaTime)
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+    
+    local isMyCharDisabled = char:GetAttribute("Knocked") == true or
+                             char:GetAttribute("IsCarried") == true or char:GetAttribute("Carried") == true or
+                             char:GetAttribute("IsHooked") == true or char:GetAttribute("Hooked") == true or char:GetAttribute("IsOnHook") == true or
+                             char:GetAttribute("IsDowned") == true or char:GetAttribute("Downed") == true or
+                             hum.PlatformStand or hum:GetState() == Enum.HumanoidStateType.PlatformStanding or
+                             char:FindFirstChild("Downed") or char:FindFirstChild("Hooked")
+                             
+    if isMyCharDisabled then
+        LockedTarget = nil
+        LockedPart = nil
+        return
+    end
+    
     local isLMBNow = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or isMobileLMBHeld
     local isRMBPressed = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) or isMobileM2Held or isMobileADSHeld
     local amIKiller = (GetPlayerRole(LocalPlayer) == "KILLER")
     local tool = FindEquippedTool()
     
+    local isLMBJustReleased = false
     if isLMBNow and not isLMBPressed then
         isLMBPressed = true
         lmbHoldStartTime = tick()
     elseif not isLMBNow and isLMBPressed then
         isLMBPressed = false
-        VeilLockedTarget = nil
-        VeilLockedPart = nil
+        isLMBJustReleased = true
     end
     
     local isVeilSpear = amIKiller or (tool and (string.find(string.lower(tool.Name), "spear") or string.find(string.lower(tool.Name), "veil")))
     
-    -- aimbot veil (Spear Throw - PC: LMB / Mobile: Touch / M2)
-    if VeilAimEnabled and isVeilSpear and (isLMBNow or isMobileM2Held) then
-        if not VeilLockedTarget or not VeilLockedPart or not IsValidStandingTarget(VeilLockedTarget) then
-            local targetChar, targetPart = GetBestTarget(true, true)
-            VeilLockedTarget = targetChar
-            VeilLockedPart = targetPart
+    -- 1. AIMBOT VEIL (Hold LMB di PC / Hold Slasher-mob.Controls.attack di Mobile)
+    if VeilAimEnabled and isVeilSpear then
+        local shouldAim = isLMBNow or isLMBJustReleased
+        
+        if shouldAim then
+            local targetChar, targetPart = GetBestTarget(true)
+            if targetPart then
+                CurrentTarget = targetChar
+                local cameraPos = Camera.CFrame.Position
+                local originPos = (char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")) and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")).Position) or cameraPos
+                local distToTarget = (targetPart.Position - cameraPos).Magnitude
+                
+                local holdTime = isLMBNow and (tick() - lmbHoldStartTime) or 1.0
+                local spearSpeed = math.clamp(135 + (holdTime * 65), 135, 200)
+                
+                local flightTime = distToTarget / spearSpeed
+                local pingTime = _G.AutoPrediction and GetServerPing() or 0.035
+                
+                local gravityAcc = 196.2
+                local dropCompensation = 0.5 * gravityAcc * math.pow(flightTime, 2)
+                
+                local autoOffset = _G.BaseOffset or 0.2
+                local targetVelocity = GetTargetVelocity(targetChar, targetPart)
+                
+                local predictedPos = targetPart.Position + (targetVelocity * (flightTime + pingTime))
+                local aimPos = predictedPos + Vector3.new(0, autoOffset + dropCompensation, 0)
+                local directionVector = (aimPos - cameraPos).Unit
+                
+                local targetCFrame = CFrame.new(cameraPos, aimPos)
+                
+                if isLMBJustReleased then
+                    Camera.CFrame = targetCFrame
+                    FireVeilSpearRemote(directionVector, spearSpeed, originPos)
+                elseif isLMBNow then
+                    local smoothness = math.clamp(_G.AutoAimSmoothness or 0.25, 0.01, 1)
+                    local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
+                    Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
+                end
+                return
+            end
         end
-
-        local targetChar, targetPart = VeilLockedTarget, VeilLockedPart
-        if targetPart and targetChar then
-            CurrentTarget = targetChar
-            local cameraPos = Camera.CFrame.Position
-            local distToTarget = (targetPart.Position - cameraPos).Magnitude
-            
-            local holdTime = tick() - lmbHoldStartTime
-            local spearSpeed = math.clamp(135 + (holdTime * 65), 135, 200)
-            local flightTime = distToTarget / spearSpeed
-            local pingTime = _G.AutoPrediction and GetServerPing() or 0.035
-            
-            -- Perhitungan Kompensasi Ketinggian Gravitasi Fisika Asli (Roblox Gravity 196.2)
-            local gravityAcc = 196.2
-            local dropCompensation = 0.5 * gravityAcc * math.pow(flightTime, 2)
-            
-            local autoOffset = _G.VeilOffset or 0.20
-            local targetVelocity = GetTargetVelocity(targetChar, targetPart)
-            
-            local predictedPos = targetPart.Position + (targetVelocity * (flightTime + pingTime))
-            local aimPos = predictedPos + Vector3.new(0, autoOffset + dropCompensation, 0)
-            
-            local targetCFrame = CFrame.new(cameraPos, aimPos)
-            local smoothness = math.clamp(_G.FiringSmoothness or 0.95, 0.01, 1)
-            local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
-            
-            Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
-            return
-        end
-    else
-        VeilLockedTarget = nil
-        VeilLockedPart = nil
     end
     
-    -- aimbot univ (PC: RMB / Mobile: M2 Skill Button seperti The Hidden Leap Dash)
-    if UniversalAimEnabled and (isRMBPressed or isMobileM2Held) then
-        local targetChar, targetPart = GetBestTarget(false, true)
-        if targetPart then
-            CurrentTarget = targetChar
-            local cameraPos = Camera.CFrame.Position
-            local distToTarget = (targetPart.Position - cameraPos).Magnitude
-            
-            local autoOffset = _G.UniversalOffset or 1.25
-            local targetVelocity = GetTargetVelocity(targetChar, targetPart)
-            local pingTime = _G.AutoPrediction and GetServerPing() or 0.035
-            
-            local bulletSpeed = 220
-            local flightTime = distToTarget / bulletSpeed
-            
-            local predictedPos = targetPart.Position + (targetVelocity * (flightTime + pingTime))
-            local aimPos = predictedPos + Vector3.new(0, autoOffset, 0)
-            
-            local targetCFrame = CFrame.new(cameraPos, aimPos)
-            local smoothness = math.clamp(_G.FiringSmoothness or 0.95, 0.01, 1)
-            local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
-            
-            Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
-            return
+    -- 2. UNIVERSAL AIMBOT (Hold RMB di PC / Hold move2/move1 di Mobile)
+    if UniversalAimEnabled then
+        local shouldAim = false
+        if _G.AutoAimMode == "OnADS" then
+            shouldAim = isRMBPressed or isMobileM2Held
+        elseif _G.AutoAimMode == "OnShoot" then
+            shouldAim = isLMBNow
+        end
+        if isMobileM2Held then shouldAim = true end
+        
+        if shouldAim then
+            local targetChar, targetPart = GetBestTarget(false)
+            if targetPart then
+                CurrentTarget = targetChar
+                local cameraPos = Camera.CFrame.Position
+                local distToTarget = (targetPart.Position - cameraPos).Magnitude
+                
+                local autoOffset = _G.BaseOffset or 0.2
+                local targetVelocity = GetTargetVelocity(targetChar, targetPart)
+                local pingTime = _G.AutoPrediction and GetServerPing() or 0.035
+                
+                local bulletSpeed = 200
+                local flightTime = distToTarget / bulletSpeed
+                local predictedPos = targetPart.Position + (targetVelocity * (flightTime + pingTime))
+                local aimPos = predictedPos + Vector3.new(0, autoOffset, 0)
+                
+                local targetCFrame = CFrame.new(cameraPos, aimPos)
+                local smoothness = math.clamp(_G.FiringSmoothness or 0.95, 0.01, 1)
+                local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
+                Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
+                return
+            end
         end
     end
 
-    -- aimbot twist of fate (Survivor Aim Pistol - PC: RMB / Mobile: Gui-mob ADS Button)
-    if (AutoAimEnabled or isMobileADSHeld) and (isRMBPressed or isMobileADSHeld) then
+    -- 3. TWIST OF FATE (PISTOL) AIMBOT (Hold RMB di PC / Hold Gui-mob di Mobile)
+    if AutoAimEnabled and tool then
+        local shouldAim = false
+        if _G.AutoAimMode == "OnADS" then
+            shouldAim = isRMBPressed or isLMBNow or isMobileADSHeld
+        elseif _G.AutoAimMode == "OnShoot" then
+            shouldAim = isLMBNow
+        end
+        if isMobileADSHeld then shouldAim = true end
+        if not shouldAim then return end
+        
         local targetChar, targetPart = GetBestTarget(false, isMobileADSHeld)
         if targetPart then
             CurrentTarget = targetChar
             local cameraPos = Camera.CFrame.Position
             local distToTarget = (targetPart.Position - cameraPos).Magnitude
             
-            local autoOffset = _G.SurvivorOffset or 0.50
+            local autoOffset = _G.BaseOffset or 0.2
             local targetVelocity = GetTargetVelocity(targetChar, targetPart)
-            local pingTime = _G.AutoPrediction and GetServerPing() or 0.025
+            local pingTime = _G.AutoPrediction and GetServerPing() or 0.035
             
-            local bulletSpeed = 750
+            local bulletSpeed = 220
             local flightTime = distToTarget / bulletSpeed
-            
-            local predictedPos = targetPart.Position + (targetVelocity * (flightTime + (pingTime * 0.5)))
+            local predictedPos = targetPart.Position + (targetVelocity * (flightTime + pingTime))
             local aimPos = predictedPos + Vector3.new(0, autoOffset, 0)
+            local directionVector = (aimPos - cameraPos).Unit
             
             local targetCFrame = CFrame.new(cameraPos, aimPos)
-            local smoothness = math.clamp(_G.FiringSmoothness or 0.98, 0.01, 1)
-            local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
             
-            Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
+            if isLMBNow and not isMobileADSHeld then
+                Camera.CFrame = targetCFrame
+                FireTwistOfFateRemote(tool, directionVector)
+            else
+                local smoothness = math.clamp(_G.FiringSmoothness or 0.95, 0.01, 1)
+                local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
+                Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
+            end
         end
     end
 end
@@ -1647,88 +1743,86 @@ end
 -- 🎯 AUTO SKILLCHECK GREAT (GENERATOR AUTOMATION - ZERO LAG OPTIMIZED)
 -- PC: Spacebar | Mobile: Survivor-mob.Control.action Button
 -- =========================================================================
-local lastSkillCheckHit = 0
+local lastHitTick = 0
+local function TriggerPerfectHit()
+    local now = tick()
+    if now - lastHitTick < 0.22 then return end
+    lastHitTick = now
+
+    task.spawn(function()
+        -- 1. Simulasi Spasi di PC
+        if VirtualInputManager then
+            pcall(function()
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                task.wait(0.02)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+            end)
+        end
+        
+        -- 2. Simulasi Tombol action di Mobile (Survivor-mob.Control.action)
+        pcall(function()
+            local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+            local sMob = pGui and pGui:FindFirstChild("Survivor-mob")
+            if sMob then
+                local ctrl = sMob:FindFirstChild("Control") or sMob:FindFirstChild("Controls")
+                local actBtn = ctrl and (ctrl:FindFirstChild("action") or ctrl:FindFirstChild("Action"))
+                if not actBtn then
+                    for _, d in ipairs(sMob:GetDescendants()) do
+                        if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) and string.lower(d.Name) == "action" then
+                            actBtn = d
+                            break
+                        end
+                    end
+                end
+                if actBtn then
+                    if firesignal then
+                        firesignal(actBtn.MouseButton1Down)
+                        firesignal(actBtn.Activated)
+                        firesignal(actBtn.MouseButton1Up)
+                    elseif actBtn.MouseButton1Click then
+                        actBtn.MouseButton1Click:Fire()
+                    end
+                end
+            end
+        end)
+    end)
+end
+
 local function ProcessAutoSkillCheck()
     if not ScriptRunning or not _G.AutoSkillCheck then return end
     
-    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pGui then return end
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return end
     
-    local scGui = pGui:FindFirstChild("SkillCheckPromptGui")
-    if not scGui or not scGui.Enabled then return end
-    
-    local line = scGui:FindFirstChild("Line", true)
-    local goal = scGui:FindFirstChild("Goal", true)
-    if not line or not goal or not line.Visible or not goal.Visible then return end
-    
-    -- Pastikan UI SkillCheck benar-benar aktif di layar (bukan tersembunyi / posisi di luar layar)
-    if line.AbsoluteSize.X <= 5 or line.AbsolutePosition.X <= 0 or line.AbsolutePosition.Y <= 0 then return end
-    
-    local now = tick()
-    if now - lastSkillCheckHit < 0.5 then return end
-    
-    local lineRot = line.Rotation % 360
-    local goalRot = goal.Rotation % 360
-    
-    -- Hitung selisih sudut baik langsung maupun dengan offset texture 120 derajat
-    local targetAngle = (goalRot + 120) % 360
-    local diff1 = math.abs((lineRot - targetAngle + 180) % 360 - 180)
-    local diff2 = math.abs((lineRot - goalRot + 180) % 360 - 180)
-    local diff = math.min(diff1, diff2)
-    
-    -- Toleransi zona Great / Perfect (selisih <= 15 derajat)
-    if diff <= 15 then
-        lastSkillCheckHit = now
-        
-        -- Jalankan di background thread terpisah agar TIDAK MENSTALL thread render FPS (ZERO LAG)
-        task.spawn(function()
-            -- 1. Simulasi Tombol Space di PC
-            if VirtualInputManager then
-                pcall(function()
-                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-                    task.wait(0.03)
-                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-                end)
+    local gui = playerGui:FindFirstChild("SkillCheckPromptGui")
+    if not gui then
+        for _, child in pairs(playerGui:GetChildren()) do
+            if child:IsA("ScreenGui") and child.Enabled and string.find(string.lower(child.Name), "skill") then
+                gui = child
+                break
             end
-            
-            -- 2. Simulasi Tombol 'action' di Mobile (Survivor-mob.Control.action)
-            pcall(function()
-                local sMob = pGui:FindFirstChild("Survivor-mob")
-                if sMob then
-                    local ctrl = sMob:FindFirstChild("Control") or sMob:FindFirstChild("Controls")
-                    local actBtn = ctrl and (ctrl:FindFirstChild("action") or ctrl:FindFirstChild("Action"))
-                    if not actBtn then
-                        for _, d in ipairs(sMob:GetDescendants()) do
-                            if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) and string.lower(d.Name) == "action" then
-                                actBtn = d
-                                break
-                            end
-                        end
-                    end
-                    if actBtn then
-                        if firesignal then
-                            firesignal(actBtn.MouseButton1Down)
-                            firesignal(actBtn.Activated)
-                            firesignal(actBtn.MouseButton1Up)
-                        elseif actBtn.MouseButton1Click then
-                            actBtn.MouseButton1Click:Fire()
-                        end
-                    end
+        end
+    end
+    
+    if gui and gui.Enabled then
+        local check = gui:FindFirstChild("Check") or gui
+        local line = check:FindFirstChild("Line") or gui:FindFirstChild("Line", true)
+        local goal = check:FindFirstChild("Goal") or gui:FindFirstChild("Goal", true)
+        
+        if line and goal and line.Visible and goal.Visible then
+            local now = tick()
+            if now - lastHitTick >= 0.22 then
+                local lineRot = line.Rotation % 360
+                local goalRot = goal.Rotation % 360
+                
+                local targetAngle = (goalRot + 120) % 360
+                local diff = math.abs((lineRot - targetAngle + 180) % 360 - 180)
+                
+                if diff <= 14 then
+                    TriggerPerfectHit()
                 end
-            end)
-            
-            -- 3. Backup Remote Generator
-            pcall(function()
-                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                local genFolder = remotes and (remotes:FindFirstChild("Generator") or remotes:FindFirstChild("Mechanics"))
-                if genFolder then
-                    local resEvent = genFolder:FindFirstChild("SkillCheckResultEvent") or genFolder:FindFirstChild("Skillcheckvalidated") or genFolder:FindFirstChild("SkillCheck")
-                    if resEvent and resEvent:IsA("RemoteEvent") then
-                        resEvent:FireServer(true, "Great")
-                    end
-                end
-            end)
-        end)
+            end
+        end
     end
 end
 
