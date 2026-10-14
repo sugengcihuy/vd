@@ -1448,52 +1448,9 @@ task.spawn(function()
     end
 end)
 
-local function CleanupDuplicateInGameUI()
-    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pGui then return end
-
-    local myRole = GetPlayerRole(LocalPlayer)
-    local seenSurvivor = false
-    local seenKiller = false
-    local children = pGui:GetChildren()
-
-    for i = #children, 1, -1 do
-        local child = children[i]
-        if child:IsA("ScreenGui") then
-            local nameLower = string.lower(child.Name)
-            local isSurvivorGui = string.find(nameLower, "survivor") or nameLower == "gui-mob"
-            local isKillerGui = string.find(nameLower, "slasher") or string.find(nameLower, "hidden")
-
-            if myRole == "KILLER" then
-                if isSurvivorGui then
-                    pcall(function() child:Destroy() end)
-                elseif isKillerGui then
-                    if seenKiller then
-                        pcall(function() child:Destroy() end)
-                    else
-                        seenKiller = true
-                    end
-                end
-            elseif myRole == "SURVIVOR" then
-                if isKillerGui then
-                    pcall(function() child:Destroy() end)
-                elseif isSurvivorGui then
-                    if seenSurvivor then
-                        pcall(function() child:Destroy() end)
-                    else
-                        seenSurvivor = true
-                    end
-                end
-            end
-        end
-    end
-end
-
 local charAddedConn = LocalPlayer.CharacterAdded:Connect(function()
     ClearMobileControlHooks()
-    CleanupDuplicateInGameUI()
     task.wait(0.5)
-    CleanupDuplicateInGameUI()
     ScanAllPlayerGuis()
 end)
 table.insert(Connections, charAddedConn)
@@ -1501,7 +1458,6 @@ table.insert(Connections, charAddedConn)
 task.spawn(function()
     while ScriptRunning do
         pcall(function()
-            CleanupDuplicateInGameUI()
             local pGui = LocalPlayer:FindFirstChild("PlayerGui")
             if pGui then
                 local hasMobGui = pGui:FindFirstChild("Survivor-mob") or pGui:FindFirstChild("Hidden-mob") or pGui:FindFirstChild("Slasher-mob")
@@ -2498,7 +2454,6 @@ task.spawn(function()
                             ClearAllESPData()
                             task.wait(0.2)
                             RefreshAllESP()
-                            CleanupDuplicateInGameUI()
                         end
                     end
                     lastHrpPos = hrp.Position
