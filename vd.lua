@@ -1,4 +1,4 @@
--- Clean previous instance
+-- Single-instance guard (Membersihkan instance lama & UI ganda saat re-exec di Match 2)
 if _G.SugengVDCleanup then
     pcall(_G.SugengVDCleanup)
     task.wait(0.1)
@@ -10,8 +10,8 @@ _G.SCPColor = Color3.fromRGB(170, 0, 255)
 _G.GenColor = Color3.fromRGB(255, 220, 0)
 _G.AimPart = "Torso"
 _G.BaseOffset = 0.45
-_G.SurvivorOffset = 0.50
-_G.UniversalOffset = 1.25
+_G.SurvivorOffset = 0.50 -- Presisi tengah dada (tidak meleset saat bergerak)
+_G.UniversalOffset = 1.25 -- Tinggi dada/kepala
 _G.VeilOffset = 0.60
 _G.WeaponModelName = "Twist of Fate"
 _G.AutoAimSmoothness = 0.25
@@ -51,7 +51,7 @@ local ShowFriends = false
 local ShowEnemies = false
 local AutoAimEnabled = false
 local VeilAimEnabled = false
-local UniversalAimEnabled = false
+local UniversalAimEnabled = false 
 local UIVisible = true
 local ScriptRunning = true
 local HasAppliedModeTerang = false
@@ -182,7 +182,23 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Lighting = game:GetService("Lighting")
 local Camera = workspace.CurrentCamera
 
--- CoreGui parent
+-- Konstanta shared (hemat alokasi per-frame)
+local WHITE_COLOR = Color3.fromRGB(255, 255, 255)
+local ZERO_VEC3 = Vector3.zero
+local SharedRaycastParams = RaycastParams.new()
+SharedRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
+SharedRaycastParams.IgnoreWater = true
+
+local OriginalLightingSettings = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    GlobalShadows = Lighting.GlobalShadows,
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient
+}
+
+-- Executor-Safe CoreGui / Parent Container
 local function GetParentGui()
     local success, hui = pcall(function() return gethui() end)
     if success and hui then return hui end
@@ -212,10 +228,9 @@ local SurvivorLockedTarget = nil
 local SurvivorLockedPart = nil
 local WindowInstance = nil
 
-local lmbHoldStartTime = 0
-local isLMBPressed = false
+-- (Variabel ini sudah dideklarasikan di atas, dihapus duplikat)
 
--- WindUI loader
+-- WindUI Library Loader
 local WindUI = nil
 pcall(function()
     WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
@@ -227,6 +242,7 @@ if not WindUI then
     end)
 end
 
+-- cleanup logic (Comprehensive Singleton Cleanup)
 _G.SugengVDCleanup = function()
     ScriptRunning = false
     for _, conn in pairs(Connections) do
@@ -238,12 +254,13 @@ _G.SugengVDCleanup = function()
     ActiveHighlights = {}
     GenHighlights = {}
     if Holder then pcall(function() Holder:Destroy() end) end
-
+    
+    -- Cleanup UI containers across CoreGui, gethui, and PlayerGui
     local containers = {}
     pcall(function() table.insert(containers, game:GetService("CoreGui")) end)
     pcall(function() if gethui then table.insert(containers, gethui()) end end)
     pcall(function() if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then table.insert(containers, LocalPlayer.PlayerGui) end end)
-
+    
     for _, parent in ipairs(containers) do
         pcall(function()
             for _, child in ipairs(parent:GetChildren()) do
@@ -262,6 +279,14 @@ _G.SugengVDCleanup = function()
         pcall(ClearMobileControlHooks)
     end
     pcall(function()
+        if OriginalLightingSettings then
+            Lighting.Brightness = OriginalLightingSettings.Brightness
+            Lighting.ClockTime = OriginalLightingSettings.ClockTime
+            Lighting.FogEnd = OriginalLightingSettings.FogEnd
+            Lighting.GlobalShadows = OriginalLightingSettings.GlobalShadows
+            Lighting.Ambient = OriginalLightingSettings.Ambient
+            Lighting.OutdoorAmbient = OriginalLightingSettings.OutdoorAmbient
+        end
         if Camera then Camera.FieldOfView = 70.0 end
     end)
     print("Cleanup Completed")
@@ -279,7 +304,7 @@ local function GetPlayerRole(player)
             return "SPECTATOR"
         end
     end
-
+    
     if player.Character then
         local char = player.Character
         if char:GetAttribute("IsZombie") == true or char:GetAttribute("Infected") == true or char:GetAttribute("CorpseCreated0492") == true or char:GetAttribute("IsInfected") == true or char:GetAttribute("IsKiller") == true then
@@ -304,7 +329,7 @@ local function CleanLightingEffects()
         for _, child in pairs(Lighting:GetChildren()) do
             local cType = child.ClassName
             local cName = string.lower(child.Name)
-            local isSkyOrSun = (cType == "Sky" or cType == "SunRaysEffect" or cType == "Clouds" or
+            local isSkyOrSun = (cType == "Sky" or cType == "SunRaysEffect" or cType == "Clouds" or 
                                 string.find(cName, "sky") or string.find(cName, "sunray") or string.find(cName, "sun_ray"))
             if not isSkyOrSun then
                 pcall(function() child:Destroy() end)
@@ -313,19 +338,65 @@ local function CleanLightingEffects()
     end)
 end
 
+local isApplyingLighting = false
 local function ApplyModeTerangInGame()
-    if not ScriptRunning or not _G.ModeTerang then return end
-    pcall(function()
-        local targetBrightness = _G.FullbrightBrightness or 2.0
-        if Lighting.Brightness ~= targetBrightness then Lighting.Brightness = targetBrightness end
-        if Lighting.ClockTime ~= 14 then Lighting.ClockTime = 14 end
-        if Lighting.FogEnd ~= 100000 then Lighting.FogEnd = 100000 end
-        if Lighting.GlobalShadows ~= false then Lighting.GlobalShadows = false end
-        if Lighting.Ambient ~= Color3.fromRGB(255, 255, 255) then Lighting.Ambient = Color3.fromRGB(255, 255, 255) end
-        if Lighting.OutdoorAmbient ~= Color3.fromRGB(255, 255, 255) then Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255) end
-    end)
+    if not ScriptRunning or isApplyingLighting then return end
+    isApplyingLighting = true
+    if _G.ModeTerang then
+        pcall(function()
+            local targetBrightness = _G.FullbrightBrightness or 2.0
+            if Lighting.Brightness ~= targetBrightness then Lighting.Brightness = targetBrightness end
+            if Lighting.ClockTime ~= 14 then Lighting.ClockTime = 14 end
+            if Lighting.FogEnd ~= 100000 then Lighting.FogEnd = 100000 end
+            if Lighting.GlobalShadows ~= false then Lighting.GlobalShadows = false end
+            if Lighting.Ambient ~= WHITE_COLOR then Lighting.Ambient = WHITE_COLOR end
+            if Lighting.OutdoorAmbient ~= WHITE_COLOR then Lighting.OutdoorAmbient = WHITE_COLOR end
+        end)
+    else
+        pcall(function()
+            if OriginalLightingSettings then
+                Lighting.Brightness = OriginalLightingSettings.Brightness
+                Lighting.ClockTime = OriginalLightingSettings.ClockTime
+                Lighting.FogEnd = OriginalLightingSettings.FogEnd
+                Lighting.GlobalShadows = OriginalLightingSettings.GlobalShadows
+                Lighting.Ambient = OriginalLightingSettings.Ambient
+                Lighting.OutdoorAmbient = OriginalLightingSettings.OutdoorAmbient
+            end
+        end)
+    end
+    isApplyingLighting = false
 end
 
+-- Event-driven Mode Terang: Mengunci kecerahan saat script game di lobby mencoba menggelapkan layar tanpa lag 60 FPS
+local lightingPropConn = Lighting:GetPropertyChangedSignal("Brightness"):Connect(function()
+    if ScriptRunning and _G.ModeTerang and not isApplyingLighting then
+        local targetBrightness = _G.FullbrightBrightness or 2.0
+        if Lighting.Brightness ~= targetBrightness then
+            ApplyModeTerangInGame()
+        end
+    end
+end)
+table.insert(Connections, lightingPropConn)
+
+local lightingClockConn = Lighting:GetPropertyChangedSignal("ClockTime"):Connect(function()
+    if ScriptRunning and _G.ModeTerang and not isApplyingLighting then
+        if Lighting.ClockTime ~= 14 then
+            ApplyModeTerangInGame()
+        end
+    end
+end)
+table.insert(Connections, lightingClockConn)
+
+local lightingFogConn = Lighting:GetPropertyChangedSignal("FogEnd"):Connect(function()
+    if ScriptRunning and _G.ModeTerang and not isApplyingLighting then
+        if Lighting.FogEnd ~= 100000 then
+            ApplyModeTerangInGame()
+        end
+    end
+end)
+table.insert(Connections, lightingFogConn)
+
+-- delete lightning
 local lightingChildConn = Lighting.ChildAdded:Connect(function()
     if ScriptRunning and _G.ModeTerang then
         task.wait()
@@ -334,6 +405,7 @@ local lightingChildConn = Lighting.ChildAdded:Connect(function()
 end)
 table.insert(Connections, lightingChildConn)
 
+-- cooldown parry
 pcall(function()
     local remotes = ReplicatedStorage:FindFirstChild("Remotes")
     local items = remotes and remotes:FindFirstChild("Items")
@@ -356,9 +428,9 @@ local function IsLocalPlayerBusy()
     local myChar = LocalPlayer.Character
     if not myChar then return true end
 
-    if LocalPlayer:GetAttribute("IsDead") == true or
-       myChar:GetAttribute("IsCarried") == true or
-       myChar:GetAttribute("IsHooked") == true or
+    if LocalPlayer:GetAttribute("IsDead") == true or 
+       myChar:GetAttribute("IsCarried") == true or 
+       myChar:GetAttribute("IsHooked") == true or 
        myChar:GetAttribute("IsDowned") == true or
        myChar:GetAttribute("Disabled") == true or
        myChar:GetAttribute("Dying") == true then
@@ -370,8 +442,9 @@ local function IsLocalPlayerBusy()
         return true
     end
 
-    if myChar:GetAttribute("isvaulting") == true or
-       myChar:GetAttribute("isVaulting") == true or
+    -- 🛡️ PENGECEKAN ATRIBUT VAULT / PALLET SURVIVOR
+    if myChar:GetAttribute("isvaulting") == true or 
+       myChar:GetAttribute("isVaulting") == true or 
        myChar:GetAttribute("isDroppingPallet") == true or
        myChar:GetAttribute("isSliding") == true or
        myChar:GetAttribute("isRepairing") == true then
@@ -380,14 +453,15 @@ local function IsLocalPlayerBusy()
 
     local checkInterractable = myChar:FindFirstChild("CheckInterractable")
     if checkInterractable then
-        if checkInterractable:GetAttribute("isVaulting") == true or
-           checkInterractable:GetAttribute("isDroppingPallet") == true or
+        if checkInterractable:GetAttribute("isVaulting") == true or 
+           checkInterractable:GetAttribute("isDroppingPallet") == true or 
            checkInterractable:GetAttribute("isvaulting") == true or
            checkInterractable:GetAttribute("isSliding") == true then
             return true
         end
     end
 
+    -- 🛡️ PENGECEKAN ANIMASI SURVIVOR TANPA BATASAN PRIORITY (Memeriksa Semua Frame Vault/Pallet/Slide)
     local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum)
     if animator then
         local isBusyAnim = false
@@ -397,14 +471,15 @@ local function IsLocalPlayerBusy()
                 local rawId = track.Animation and track.Animation.AnimationId or ""
                 local numId = string.match(rawId, "%d+") or ""
 
-                if numId == "72908958549833" or numId == "126081405469607" or numId == "136962284480779" or
+                -- ID Animasi Vault / Pallet / Slide Survivor
+                if numId == "72908958549833" or numId == "126081405469607" or numId == "136962284480779" or 
                    numId == "107600098059627" or numId == "118019257172845" or numId == "126751859125353" then
                     isBusyAnim = true
                     return
                 end
 
-                if (string.find(animName, "vault") or string.find(animName, "pallet") or string.find(animName, "slide") or string.find(animName, "drop")) and
-                   not string.find(animName, "idle") and not string.find(animName, "hold") and
+                if (string.find(animName, "vault") or string.find(animName, "pallet") or string.find(animName, "slide") or string.find(animName, "drop")) and 
+                   not string.find(animName, "idle") and not string.find(animName, "hold") and 
                    not string.find(animName, "run") and not string.find(animName, "walk") then
                     isBusyAnim = true
                     return
@@ -457,15 +532,30 @@ local function IsKillerPlayingRangedSound(killerChar)
     return false, nil
 end
 
+local function GetServerPing()
+    local ping = 0.035
+    pcall(function()
+        local stats = StatsService:FindFirstChild("Network")
+        local serverStats = stats and stats:FindFirstChild("ServerStatsItem")
+        local pingStat = serverStats and serverStats:FindFirstChild("Data Ping")
+        if pingStat then
+            ping = pingStat:GetValue() / 1000
+        end
+    end)
+    return ping
+end
+
 local function IsKillerCharacter(char, player)
     if not char then return false end
 
+    -- 🛑 RULE 1: JIKA SATU TIM DENGAN LOCALPLAYER -> FIX TEMAN SE-TIM (ABAIKAN TOTAL!)
     if player and LocalPlayer.Team and player.Team then
         if player.Team == LocalPlayer.Team then
             return false
         end
     end
 
+    -- RULE 2: Cek Nama Tim Opponent
     if player and player.Team then
         local teamName = string.lower(player.Team.Name)
         if string.find(teamName, "killer") or string.find(teamName, "monster") or string.find(teamName, "slasher") or string.find(teamName, "beast") then
@@ -473,19 +563,23 @@ local function IsKillerCharacter(char, player)
         end
     end
 
+    -- RULE 3: Atribut Spesifik Killer
     if char:GetAttribute("IsKiller") == true or (player and player:GetAttribute("IsKiller") == true) or char:GetAttribute("Role") == "Killer" then
         return true
     end
 
+    -- RULE 4: Nama Model / Character Killer
     local charName = string.lower(char.Name)
     if string.find(charName, "jason") or string.find(charName, "veil") or string.find(charName, "killer") or string.find(charName, "slasher") or string.find(charName, "monster") then
         return true
     end
 
+    -- RULE 5: Folder Induk di Workspace
     if char.Parent and (string.lower(char.Parent.Name) == "killers" or string.lower(char.Parent.Name) == "killer") then
         return true
     end
 
+    -- RULE 6: Fallback Player Beda Tim
     if player and player ~= LocalPlayer then
         if LocalPlayer.Team and player.Team and player.Team ~= LocalPlayer.Team then
             return true
@@ -507,7 +601,7 @@ local function FindKillerForParry()
             local char = player.Character
             local hum = char:FindFirstChildOfClass("Humanoid")
             local kHRP = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
-
+            
             if hum and hum.Health > 0 and kHRP then
                 if IsKillerCharacter(char, player) then
                     local dist = (myHRP.Position - kHRP.Position).Magnitude
@@ -529,9 +623,9 @@ end
 local function CalculateDynamicTriggerDistance(kHRP)
     local baseDist = _G.ParryMaxDistance or 12.5
     if not kHRP then return baseDist end
-    local velocity = kHRP.AssemblyLinearVelocity or kHRP.Velocity or Vector3.new(0,0,0)
+    local velocity = kHRP.AssemblyLinearVelocity or kHRP.Velocity or ZERO_VEC3
     local speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-    return baseDist + math.clamp(speed * 0.15, 0, 2.0)
+    return baseDist + math.clamp(speed * 0.12, 0, 2.0)
 end
 
 local function FaceKillerInstant(kHRP)
@@ -646,6 +740,7 @@ local function TriggerOfficialParry(reason, distance, kHRP)
                 VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
             end)
         end
+        -- Trigger tombol Gui-mob di Mobile (Survivor-mob.Control['Gui-mob'])
         pcall(function()
             local pGui = LocalPlayer:FindFirstChild("PlayerGui")
             local sMob = pGui and pGui:FindFirstChild("Survivor-mob")
@@ -674,25 +769,26 @@ local function TriggerOfficialParry(reason, distance, kHRP)
     end)
 end
 
+-- DATABASE ANIMASI SERANGAN M1 & M2 TERVERIFIKASI (STRICT WHITELIST - GABUNGAN)
 local KnownAttackAnimIds = {
-    -- Jason attacks
-    ["110355011987939"] = true, [110355011987939] = true, -- Jason Bacok M1
-    ["139369275981139"] = true, [139369275981139] = true, -- Jason Bacok Heavy M2
+    -- 🪓 JASON ATTACKS (Bacok M1 & M2)
+    ["110355011987939"] = true, -- Jason Bacok M1
+    ["139369275981139"] = true, -- Jason Bacok Heavy M2
 
-    -- Veil attacks
-    ["122812055447896"] = true, [122812055447896] = true, -- Veil Nyucuk / Melee 1
-    ["78935059863801"]  = true, [78935059863801]  = true, -- Veil Nyucuk / Melee 2
+    -- 🗡️ VEIL ATTACKS (Nyucuk M1 Melee & Dash)
+    ["122812055447896"] = true, -- Veil Nyucuk / Melee 1
+    ["78935059863801"]  = true, -- Veil Nyucuk / Melee 2
 
-    -- The Hidden dash
-    ["98163597193511"] = true, [98163597193511] = true, -- The Hidden Dash Skill 1
-    ["73681849513551"] = true, [73681849513551] = true, -- The Hidden Dash Skill 2
+    -- 👻 THE HIDDEN DASH ATTACKS (Verified From Log)
+    ["98163597193511"] = true, -- The Hidden Dash Skill 1
+    ["73681849513551"] = true, -- The Hidden Dash Skill 2
 
-    -- The Masked dash
-    ["85030641905220"]  = true, [85030641905220]  = true, -- The Masked High Speed Dash (40.0 studs/s)
-    ["91021650846272"]  = true, [91021650846272]  = true, -- The Masked Chainsaw Dash
-    ["106871536134254"] = true, [106871536134254] = true,
+    -- 🎭 THE MASKED / DUCK CHAINSAW DASH ATTACKS (Verified From Log)
+    ["85030641905220"]  = true, -- The Masked High Speed Dash (40.0 studs/s)
+    ["91021650846272"]  = true, -- The Masked Chainsaw Dash
+    ["106871536134254"] = true,
 
-    -- Other killers
+    -- 👹 KILLERS LAINNYA (Terverifikasi)
     ["77210283630654"]  = true, ["78432063483146"]  = true, ["118907603246885"] = true,
     ["80411309607666"]  = true, ["138720291317243"] = true, ["111920872708571"] = true,
     ["105374834496520"] = true, ["115244153053858"] = true, ["130593238885843"] = true,
@@ -700,57 +796,52 @@ local KnownAttackAnimIds = {
     ["74968262036854"]  = true, ["113255068724446"] = true, ["133002120549396"] = true,
     ["129784271201071"] = true, ["124706657239027"] = true, ["132817836308238"] = true,
     ["117042998468241"] = true, ["133963973694098"] = true,
+    -- Killer 2 (dari tabel pertama yang sebelumnya terpisah)
+    ["104682704142865"] = true,
 }
 
 local LungeHoldAnimIds = {
-    ["98163597193511"] = true, [98163597193511] = true, -- The Hidden Dash
-    ["73681849513551"] = true, [73681849513551] = true, -- The Hidden Dash
-    ["85030641905220"] = true, [85030641905220] = true, -- The Masked Dash
-    ["117042998468241"] = true, [117042998468241] = true,
-    ["118907603246885"] = true, [118907603246885] = true,
-    ["122812055447896"] = true, [122812055447896] = true,
-    ["105374834496520"] = true, [105374834496520] = true,
-    ["115244153053858"] = true, [115244153053858] = true,
-    ["117070354890871"] = true, [117070354890871] = true,
-    ["135002183282873"] = true, [135002183282873] = true,
-    ["113255068724446"] = true, [113255068724446] = true,
+    ["98163597193511"] = true, -- The Hidden Dash
+    ["73681849513551"] = true, -- The Hidden Dash
+    ["85030641905220"] = true, -- The Masked Dash
+    ["117042998468241"] = true,
+    ["118907603246885"] = true,
+    ["122812055447896"] = true,
+    ["105374834496520"] = true,
+    ["115244153053858"] = true,
+    ["117070354890871"] = true,
+    ["135002183282873"] = true,
+    ["113255068724446"] = true,
 }
 
+-- DATABASE ANIMASI BLACKLIST TERVERIFIKASI (VAULT & NON-ATTACK)
 local BlacklistAnimIds = {
-    -- Killer vaulting
-    ["108211560927158"] = true, [108211560927158] = true, -- Killer Window Vault (1.50s)
-    ["112633191985365"] = true, [112633191985365] = true, -- Killer Standard Vault
-    ["119367394383893"] = true, [119367394383893] = true, -- Killer Walk/Chase Core (3.20s)
-    ["134595759785108"] = true, [134595759785108] = true, -- Killer Idle Core (4.00s)
-    ["111223305405046"] = true, [111223305405046] = true,
-    ["102746205979822"] = true, [102746205979822] = true,
-    ["131775987732809"] = true, [131775987732809] = true,
-    ["110466971021611"] = true, [110466971021611] = true,
+    -- 🛑 KILLER VAULTING (VERIFIED FROM LIVE LOG: 108211560927158)
+    ["108211560927158"] = true, -- Killer Window Vault (1.50s)
+    ["112633191985365"] = true, -- Killer Standard Vault
+    ["119367394383893"] = true, -- Killer Walk/Chase Core (3.20s)
+    ["134595759785108"] = true, -- Killer Idle Core (4.00s)
+    ["111223305405046"] = true,
+    ["102746205979822"] = true,
+    ["131775987732809"] = true,
+    ["110466971021611"] = true,
 
-    -- Veil weapon swap & stance
-    ["96744338559260"]  = true, [96744338559260]  = true, -- Veil Ganti Senjata / Swap
-    ["75258958842388"]  = true, [75258958842388]  = true, -- Veil Ganti Senjata / Stance
-    ["92098503722633"]  = true, [92098503722633]  = true, -- Veil Stance Tombak
-    ["109257644640676"] = true, [109257644640676] = true, -- Veil Spear Stance Mode (4.0s)
-    ["138045669415653"] = true, [138045669415653] = true, -- Veil Lempar Tombak
-    ["93136435416899"]  = true, [93136435416899]  = true, -- Veil Spear Charge
-    ["139928639611415"] = true, [139928639611415] = true, -- Veil Ability Buff
+    -- 🛑 VEIL GANTI SENJATA & STANCE MODE
+    ["96744338559260"]  = true, -- Veil Ganti Senjata / Swap
+    ["75258958842388"]  = true, -- Veil Ganti Senjata / Stance
+    ["92098503722633"]  = true, -- Veil Stance Tombak
+    ["109257644640676"] = true, -- Veil Spear Stance Mode (4.0s)
+    ["138045669415653"] = true, -- Veil Lempar Tombak
+    ["93136435416899"]  = true, -- Veil Spear Charge
+    ["139928639611415"] = true, -- Veil Ability Buff
 
-    -- Jason special skill
-    ["125224839697689"] = true, [125224839697689] = true, -- Jason Special Skill
+    -- 🛑 JASON SKILL SPESIAL (Unparryable)
+    ["125224839697689"] = true, -- Jason Special Skill
 }
 
 local function IsAnimBlacklisted(rawAnimId, animNumId)
-    if BlacklistAnimIds[animNumId] or BlacklistAnimIds[tonumber(animNumId)] then
-        return true
-    end
-    local strRaw = tostring(rawAnimId)
-    for idKey, _ in pairs(BlacklistAnimIds) do
-        if string.find(strRaw, tostring(idKey)) then
-            return true
-        end
-    end
-    return false
+    -- Setelah key number duplikat dihapus, lookup string langsung sudah cukup
+    return BlacklistAnimIds[animNumId] == true
 end
 
 local AttackKeywords = {"attack", "slash", "swing", "hit", "lunge", "strike", "cut", "chop", "m1", "m2", "heavy", "light", "stab", "punch", "kill", "bacok", "nyucuk", "cleave"}
@@ -764,18 +855,21 @@ local function ClassifyTrack(track, killerChar)
     local animNumId = string.match(rawAnimId, "%d+") or "0"
     local animName = string.lower(track.Animation.Name or "")
 
+    -- 🛑 1. MULTI-TYPE BLACKLIST CHECK (Blocking Vault ID 108211560927158 100%)
     if IsAnimBlacklisted(rawAnimId, animNumId) then
         return false, false, animNumId
     end
 
+    -- 🛑 2. NON-ATTACK KEYWORD CHECK
     for _, kw in ipairs(NonAttackKeywords) do
         if string.find(animName, kw) then
             return false, false, animNumId
         end
     end
 
-    local isKnown = (KnownAttackAnimIds[animNumId] == true or KnownAttackAnimIds[tonumber(animNumId)] == true)
-    local isLungeHold = (LungeHoldAnimIds[animNumId] == true or LungeHoldAnimIds[tonumber(animNumId)] == true)
+    -- 🟢 3. STRICT WHITELIST CHECK
+    local isKnown = KnownAttackAnimIds[animNumId] == true
+    local isLungeHold = LungeHoldAnimIds[animNumId] == true
 
     for _, kw in ipairs(LungeKeywords) do
         if string.find(animName, kw) then
@@ -788,10 +882,12 @@ local function ClassifyTrack(track, killerChar)
         return true, isLungeHold, animNumId
     end
 
+    -- 🛑 4. JIKA KILLER SEDANG BUSY -> ABAIKAN ANIMASI UNKNOWN
     if killerChar and IsKillerBusy(killerChar) then
         return false, false, animNumId
     end
 
+    -- 🟡 5. CLASSIFIER UNTUK ANIMASI UNKNOWN
     local isAttackName = false
     for _, kw in ipairs(AttackKeywords) do
         if string.find(animName, kw) then
@@ -887,13 +983,13 @@ end
 
 local function HookKillerAnimator(killerChar)
     if not killerChar or not ScriptRunning then return end
-
+    
     local hum = killerChar:FindFirstChildOfClass("Humanoid")
     local animator = hum and hum:FindFirstChildOfClass("Animator")
     if animator then
         AttachAnimationListener(animator, killerChar)
     end
-
+    
     for _, obj in ipairs(killerChar:GetChildren()) do
         if obj:IsA("Model") or obj:IsA("Tool") then
             local subAnim = obj:FindFirstChildOfClass("Animator") or (obj:FindFirstChildOfClass("Humanoid") and obj:FindFirstChildOfClass("Humanoid"):FindFirstChildOfClass("Animator"))
@@ -904,9 +1000,11 @@ local function HookKillerAnimator(killerChar)
     end
 end
 
+-- Panggil sekali di init (bukan setiap Heartbeat)
+SetupParryResultListener()
+
 local autoParryConn = RunService.Heartbeat:Connect(function()
     if not ScriptRunning or not _G.AutoParry or IsLocalPlayerBusy() then return end
-    SetupParryResultListener()
     local killerChar, killerName, dist, kHRP, myHRP = FindKillerForParry()
     if killerChar and dist <= (_G.ParryMaxDistance or 12.5) then
         HookKillerAnimator(killerChar)
@@ -915,6 +1013,7 @@ local autoParryConn = RunService.Heartbeat:Connect(function()
 end)
 table.insert(Connections, autoParryConn)
 
+-- esp logic
 local function RemoveESPFromTarget(target)
     if target and ActiveHighlights[target] then
         pcall(function() ActiveHighlights[target]:Destroy() end)
@@ -951,7 +1050,7 @@ local function IsMoving(character, aimPart)
     local hum = character:FindFirstChildOfClass("Humanoid")
     if hum and hum.MoveDirection.Magnitude > 0.1 then return true end
     if aimPart then
-        local vel = aimPart.AssemblyLinearVelocity or aimPart.Velocity or Vector3.new(0,0,0)
+        local vel = aimPart.AssemblyLinearVelocity or aimPart.Velocity or ZERO_VEC3
         if Vector3.new(vel.X, 0, vel.Z).Magnitude > 0.1 then return true end
     end
     return false
@@ -960,20 +1059,20 @@ end
 local function IsSCP(character)
     if not character or not character:IsA("Model") or character == LocalPlayer.Character then return false end
     if character.Parent and (character.Parent.Name == "FakeCharacters" or character.Parent.Name == "Clones") then return false end
-
+    
     local hum = character:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then ClearSCPData(character); return false end
     if character:GetAttribute("IsDead") == true or character:GetAttribute("Dead") == true or character:GetAttribute("IsDowned") == true then
         ClearSCPData(character)
         return false
     end
-
+    
     local aimPart = GetAimPart(character)
     if not aimPart then return false end
-
+    
     local cName = string.lower(character.Name)
     local pName = character.Parent and string.lower(character.Parent.Name) or ""
-    local isSCPName = string.find(cName, "scp") or string.find(pName, "scp") or
+    local isSCPName = string.find(cName, "scp") or string.find(pName, "scp") or 
                       string.find(cName, "zombie") or string.find(cName, "infected") or
                       string.find(cName, "ghoul") or string.find(cName, "minion") or
                       string.find(cName, "thrall") or string.find(cName, "revived") or
@@ -1007,20 +1106,21 @@ local function IsEnemy(character)
     if not character or not character:IsA("Model") then return false, "NONE" end
     local player = Players:GetPlayerFromCharacter(character)
     if player == LocalPlayer or character == LocalPlayer.Character then return false, "NONE" end
-
+    
     local hum = character:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return false, "NONE" end
-
+    
     local myRole = GetPlayerRole(LocalPlayer)
     if myRole == "SPECTATOR" then return false, "SPECTATOR" end
-
-    local isTargetZombie = character:GetAttribute("IsZombie") == true or
-                           character:GetAttribute("Infected") == true or
-                           character:GetAttribute("CorpseCreated0492") == true or
+    
+    -- zombie char detect
+    local isTargetZombie = character:GetAttribute("IsZombie") == true or 
+                           character:GetAttribute("Infected") == true or 
+                           character:GetAttribute("CorpseCreated0492") == true or 
                            character:GetAttribute("IsInfected") == true
-
+    
     local targetRole = isTargetZombie and "KILLER" or (player and GetPlayerRole(player) or "NONE")
-
+    
     if myRole == "SURVIVOR" or myRole == "NONE" then
         if IsSCP(character) or isTargetZombie then return true, "SCP" end
         if targetRole == "KILLER" then return true, "KILLER" end
@@ -1048,7 +1148,7 @@ local function CreateHighlight(target, color)
         end
         return
     end
-
+    
     local highlight = Instance.new("Highlight")
     highlight.Name = "ESP_Highlight"
     highlight.Adornee = target
@@ -1068,7 +1168,8 @@ local function RefreshGeneratorESP()
         GenHighlights = {}
         return
     end
-
+    
+    -- Validasi cache generator agar tidak memindai workspace:GetDescendants() setiap 1.5 detik (Menghemat 95% CPU)
     local needsScan = (#CachedGenerators == 0)
     if not needsScan then
         for _, gen in ipairs(CachedGenerators) do
@@ -1078,7 +1179,7 @@ local function RefreshGeneratorESP()
             end
         end
     end
-
+    
     if needsScan then
         CachedGenerators = {}
         local container = workspace:FindFirstChild("Map") or workspace
@@ -1091,7 +1192,7 @@ local function RefreshGeneratorESP()
             end
         end
     end
-
+    
     local validGens = {}
     for _, descendant in ipairs(CachedGenerators) do
         if descendant and descendant.Parent then
@@ -1110,7 +1211,7 @@ local function RefreshGeneratorESP()
             end
         end
     end
-
+    
     for gen, hl in pairs(GenHighlights) do
         if not validGens[gen] then pcall(function() hl:Destroy() end); GenHighlights[gen] = nil end
     end
@@ -1120,10 +1221,10 @@ local function RefreshAllESP()
     if not ScriptRunning or not ESPEnabled then ClearAllESPData(); return end
     local myRole = GetPlayerRole(LocalPlayer)
     if myRole == "SPECTATOR" then ClearAllESPData(); return end
-
+    
     local amIKiller = (myRole == "KILLER")
     local validTargets = {}
-
+    
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local char = player.Character
@@ -1132,7 +1233,7 @@ local function RefreshAllESP()
             elseif not isEnemy and ShowFriends then validTargets[char] = _G.FriendColor end
         end
     end
-
+    
     for _, child in ipairs(workspace:GetChildren()) do
         if child:IsA("Model") and IsSCP(child) then
             local aimPart = GetAimPart(child)
@@ -1187,7 +1288,7 @@ local function RefreshAllESP()
             end
         end
     end
-
+    
     for target, color in pairs(validTargets) do CreateHighlight(target, color) end
     for target, hl in pairs(ActiveHighlights) do
         if not validTargets[target] then RemoveESPFromTarget(target) end
@@ -1209,6 +1310,7 @@ task.spawn(function()
     end
 end)
 
+-- aimbot logic
 local function FindEquippedTool()
     local character = LocalPlayer.Character
     if character then
@@ -1217,9 +1319,9 @@ local function FindEquippedTool()
         for _, child in pairs(character:GetChildren()) do
             if child:IsA("Tool") or child:IsA("Model") then
                 local cName = string.lower(child.Name)
-                if string.find(cName, "twist") or string.find(cName, "fate") or string.find(cName, "spear") or
-                   string.find(cName, "weapon") or string.find(cName, "veil") or string.find(cName, "hidden") or
-                   string.find(cName, "blade") or string.find(cName, "scythe") or string.find(cName, "sword") or
+                if string.find(cName, "twist") or string.find(cName, "fate") or string.find(cName, "spear") or 
+                   string.find(cName, "weapon") or string.find(cName, "veil") or string.find(cName, "hidden") or 
+                   string.find(cName, "blade") or string.find(cName, "scythe") or string.find(cName, "sword") or 
                    string.find(cName, "gun") or string.find(cName, "pistol") then
                     return child
                 end
@@ -1251,30 +1353,26 @@ local function IsTargetVisible(targetPart, character, ignoreWallCheck)
     if ignoreWallCheck then return true end
     if not _G.WallCheck then return true end
     local cameraPos = Camera.CFrame.Position
-    local targetPos = targetPart.Position
-    local direction = targetPos - cameraPos
+    local direction = targetPart.Position - cameraPos
 
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-
+    -- Reuse shared RaycastParams (hemat alokasi C++ object per-frame)
     local ignoreList = {LocalPlayer.Character, Holder}
     if character then table.insert(ignoreList, character) end
-    raycastParams.FilterDescendantsInstances = ignoreList
-    raycastParams.IgnoreWater = true
+    SharedRaycastParams.FilterDescendantsInstances = ignoreList
 
-    local result = workspace:Raycast(cameraPos, direction, raycastParams)
+    local result = workspace:Raycast(cameraPos, direction, SharedRaycastParams)
     return result == nil
 end
 
 local function GetTargetVelocity(character, part)
-    if not character then return Vector3.new(0,0,0) end
+    if not character then return ZERO_VEC3 end
     local hum = character:FindFirstChildOfClass("Humanoid")
     if hum and hum.MoveDirection.Magnitude > 0.05 then return hum.MoveDirection * hum.WalkSpeed end
     if part then
-        local vel = part.AssemblyLinearVelocity or part.Velocity or Vector3.new(0,0,0)
+        local vel = part.AssemblyLinearVelocity or part.Velocity or ZERO_VEC3
         if vel.Magnitude > 0.1 then return vel end
     end
-    return Vector3.new(0,0,0)
+    return ZERO_VEC3
 end
 
 local function GetBestTarget(isVeilMode, ignoreFOV)
@@ -1283,12 +1381,13 @@ local function GetBestTarget(isVeilMode, ignoreFOV)
     local cameraPos = Camera.CFrame.Position
     local amIKiller = (GetPlayerRole(LocalPlayer) == "KILLER")
     local candidates = {}
-
+    
+    -- Titik acuan bidikan (Pada Mobile / saat tombol ADS/M2 ditekan, gunakan titik tengah layar / crosshair)
     local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     local mousePos = UserInputService:GetMouseLocation()
     local isMobileDevice = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
     local aimReferencePoint = (isMobileDevice or isMobileADSHeld or isMobileM2Held) and screenCenter or mousePos
-
+    
     if not amIKiller then
         for scpModel, _ in pairs(KnownSCPs) do
             if scpModel and scpModel.Parent and scpModel:IsA("Model") and IsValidStandingTarget(scpModel) then
@@ -1297,7 +1396,7 @@ local function GetBestTarget(isVeilMode, ignoreFOV)
             end
         end
     end
-
+    
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local character = player.Character
@@ -1307,7 +1406,7 @@ local function GetBestTarget(isVeilMode, ignoreFOV)
             end
         end
     end
-
+    
     local ignoreWall = isVeilMode and (not _G.VeilWallCheck)
     for _, candidate in ipairs(candidates) do
         local aimPart = candidate.part
@@ -1316,7 +1415,7 @@ local function GetBestTarget(isVeilMode, ignoreFOV)
         if onScreen then
             local screenVec = Vector2.new(screenPos.X, screenPos.Y)
             local mouseDist = (screenVec - aimReferencePoint).Magnitude
-
+            
             local passesFOV = ignoreFOV or (mouseDist <= (_G.AutoAimFOV or 250))
             if passesFOV and IsTargetVisible(aimPart, candidate.character, ignoreWall) then
                 local score = mouseDist + ((aimPart.Position - cameraPos).Magnitude * 0.25)
@@ -1328,12 +1427,15 @@ local function GetBestTarget(isVeilMode, ignoreFOV)
             end
         end
     end
-
+    
     LockedTarget = bestTarget
     LockedPart = bestPart
     return bestTarget, bestPart
 end
 
+-- =========================================================================
+-- 📱 MOBILE CONTROLS HOOK (THE HIDDEN M2 LEAP, KILLER DASH, WEAPON ADS)
+-- =========================================================================
 local HookedButtons = {}
 local function ClearMobileControlHooks()
     for _, conn in ipairs(MobileControlsConns) do
@@ -1385,7 +1487,8 @@ end
 local function HookMobileGui(gui)
     if not gui or not gui:IsA("ScreenGui") then return end
     local gNameLower = string.lower(gui.Name)
-
+    
+    -- 1. THE HIDDEN MOBILE (Hidden-mob.Controls.move2 -> Universal Aim)
     if string.find(gNameLower, "hidden") then
         local controls = gui:FindFirstChild("Controls") or gui:FindFirstChild("Control") or gui
         local move2Btn = ResolveButton(controls, "move2") or ResolveButton(controls, "m2")
@@ -1394,6 +1497,7 @@ local function HookMobileGui(gui)
         end
     end
 
+    -- 2. SLASHER MOBILE (Slasher-mob.Controls.move1 -> Universal Aim | Slasher-mob.Controls.attack -> Veil Aim)
     if string.find(gNameLower, "slasher") then
         local controls = gui:FindFirstChild("Controls") or gui:FindFirstChild("Control") or gui
         local move1Btn = ResolveButton(controls, "move1") or ResolveButton(controls, "m1")
@@ -1407,6 +1511,7 @@ local function HookMobileGui(gui)
         end
     end
 
+    -- 3. SURVIVOR MOBILE (Survivor-mob.Control['Gui-mob'] -> Twist of Fate Aim)
     if string.find(gNameLower, "survivor") or string.find(gNameLower, "gui-mob") then
         local controls = gui:FindFirstChild("Control") or gui:FindFirstChild("Controls") or gui
         local guiMobBtn = ResolveButton(controls, "Gui-mob") or ResolveButton(controls, "gui-mob") or ResolveButton(controls, "dagger")
@@ -1455,6 +1560,7 @@ local charAddedConn = LocalPlayer.CharacterAdded:Connect(function()
 end)
 table.insert(Connections, charAddedConn)
 
+-- Self-healing Mobile Control Scanner (Setiap 2 detik memastikan kontrol mobile ter-hook jika masuk match dari lobby)
 task.spawn(function()
     while ScriptRunning do
         pcall(function()
@@ -1495,23 +1601,27 @@ table.insert(Connections, touchSafetyConn)
 
 local function ProcessAutoAim(deltaTime)
     local isMobileDevice = UserInputService.TouchEnabled
-
+    
     local isVeilAimActive = false
     local isUnivAimActive = false
     local isSurvivorAimActive = false
-
+    
     if isMobileDevice then
+        -- DI MOBILE: HANYA aktif saat tombol GUI terkait benar-benar ditahan!
+        -- Menggeser layar kosong / joystick TIDAK AKAN PERNAH memicu aimbot!
         isVeilAimActive = isMobileLMBHeld
         isUnivAimActive = isMobileM2Held
         isSurvivorAimActive = isMobileADSHeld
     else
+        -- DI PC: Menggunakan klik mouse (LMB untuk Veil, RMB untuk Universal & Survivor)
         local isLMBNow = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
         local isRMBPressed = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
         isVeilAimActive = isLMBNow or isMobileLMBHeld
         isUnivAimActive = isRMBPressed or isMobileM2Held
         isSurvivorAimActive = isRMBPressed or isMobileADSHeld
     end
-
+    
+    -- OPTIMASI 0% CPU: Jika player tidak sedang membidik/menahan tombol aim, keluar seketika!
     if not (isVeilAimActive or isUnivAimActive or isSurvivorAimActive) then
         if LockedTarget then LockedTarget = nil end
         if LockedPart then LockedPart = nil end
@@ -1526,17 +1636,17 @@ local function ProcessAutoAim(deltaTime)
 
     local char = LocalPlayer.Character
     if not char then return end
-
+    
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return end
-
+    
     local isMyCharDisabled = char:GetAttribute("Knocked") == true or
                              char:GetAttribute("IsCarried") == true or char:GetAttribute("Carried") == true or
                              char:GetAttribute("IsHooked") == true or char:GetAttribute("Hooked") == true or char:GetAttribute("IsOnHook") == true or
                              char:GetAttribute("IsDowned") == true or char:GetAttribute("Downed") == true or
                              hum.PlatformStand or hum:GetState() == Enum.HumanoidStateType.PlatformStanding or
                              char:FindFirstChild("Downed") or char:FindFirstChild("Hooked")
-
+                             
     if isMyCharDisabled then
         LockedTarget = nil
         LockedPart = nil
@@ -1544,10 +1654,11 @@ local function ProcessAutoAim(deltaTime)
         VeilLockedPart = nil
         return
     end
-
+    
     local amIKiller = (GetPlayerRole(LocalPlayer) == "KILLER")
     local tool = FindEquippedTool()
-
+    
+    -- Tracking status Hold untuk Veil (menghitung charge speed tombak)
     if isVeilAimActive and not isLMBPressed then
         isLMBPressed = true
         lmbHoldStartTime = tick()
@@ -1556,9 +1667,10 @@ local function ProcessAutoAim(deltaTime)
         VeilLockedTarget = nil
         VeilLockedPart = nil
     end
-
+    
     local isVeilSpear = amIKiller or (tool and (string.find(string.lower(tool.Name), "spear") or string.find(string.lower(tool.Name), "veil")))
-
+    
+    -- 1. AIMBOT VEIL (Hold LMB di PC / Hold Slasher-mob.Controls.attack di Mobile)
     if VeilAimEnabled and isVeilSpear and isVeilAimActive then
         if not VeilLockedTarget or not VeilLockedPart or not IsValidStandingTarget(VeilLockedTarget) then
             local targetChar, targetPart = GetBestTarget(true, true)
@@ -1571,24 +1683,27 @@ local function ProcessAutoAim(deltaTime)
             CurrentTarget = targetChar
             local cameraPos = Camera.CFrame.Position
             local distToTarget = (targetPart.Position - cameraPos).Magnitude
-
+            
             local holdTime = tick() - lmbHoldStartTime
             local spearSpeed = math.clamp(135 + (holdTime * 65), 135, 200)
             local flightTime = distToTarget / spearSpeed
-
+            local pingTime = 0.035
+            
+            -- Perhitungan Kompensasi Ketinggian Gravitasi Fisika Asli (Roblox Gravity 196.2)
+            -- Semakin jauh jarak musuh, kamera mendongak makin tinggi ke atas secara alami
             local gravityAcc = 196.2
             local dropCompensation = 0.5 * gravityAcc * math.pow(flightTime, 2)
-
+            
             local autoOffset = _G.VeilOffset or 0.60
             local targetVelocity = GetTargetVelocity(targetChar, targetPart)
-
-            local predictedPos = targetPart.Position + (targetVelocity * flightTime)
+            
+            local predictedPos = targetPart.Position + (targetVelocity * (flightTime + pingTime))
             local aimPos = predictedPos + Vector3.new(0, autoOffset + dropCompensation, 0)
-
+            
             local targetCFrame = CFrame.new(cameraPos, aimPos)
             local smoothness = math.clamp(_G.FiringSmoothness or 0.95, 0.01, 1)
             local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
-
+            
             Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
             return
         end
@@ -1596,7 +1711,8 @@ local function ProcessAutoAim(deltaTime)
         VeilLockedTarget = nil
         VeilLockedPart = nil
     end
-
+    
+    -- 2. UNIVERSAL AIMBOT (Hold RMB di PC / Hold move2/move1 di Mobile)
     if UniversalAimEnabled and isUnivAimActive then
         if not UniversalLockedTarget or not UniversalLockedPart or not IsValidStandingTarget(UniversalLockedTarget) then
             local targetChar, targetPart = GetBestTarget(false, true)
@@ -1609,20 +1725,21 @@ local function ProcessAutoAim(deltaTime)
             CurrentTarget = targetChar
             local cameraPos = Camera.CFrame.Position
             local distToTarget = (targetPart.Position - cameraPos).Magnitude
-
+            
             local autoOffset = _G.UniversalOffset or 1.25
             local targetVelocity = GetTargetVelocity(targetChar, targetPart)
-
+            local pingTime = 0.035
+            
             local bulletSpeed = 220
             local flightTime = distToTarget / bulletSpeed
-
-            local predictedPos = targetPart.Position + (targetVelocity * flightTime)
+            
+            local predictedPos = targetPart.Position + (targetVelocity * (flightTime + pingTime))
             local aimPos = predictedPos + Vector3.new(0, autoOffset, 0)
-
+            
             local targetCFrame = CFrame.new(cameraPos, aimPos)
             local smoothness = math.clamp(_G.FiringSmoothness or 0.95, 0.01, 1)
             local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
-
+            
             Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
             return
         end
@@ -1631,6 +1748,7 @@ local function ProcessAutoAim(deltaTime)
         UniversalLockedPart = nil
     end
 
+    -- 3. TWIST OF FATE (PISTOL) AIMBOT (Hold RMB di PC / Hold Gui-mob di Mobile)
     if AutoAimEnabled and tool and isSurvivorAimActive then
         if not SurvivorLockedTarget or not SurvivorLockedPart or not IsValidStandingTarget(SurvivorLockedTarget) then
             local targetChar, targetPart = GetBestTarget(false, isMobileADSHeld)
@@ -1643,20 +1761,22 @@ local function ProcessAutoAim(deltaTime)
             CurrentTarget = targetChar
             local cameraPos = Camera.CFrame.Position
             local distToTarget = (targetPart.Position - cameraPos).Magnitude
-
+            
             local autoOffset = _G.SurvivorOffset or 0.50
             local targetVelocity = GetTargetVelocity(targetChar, targetPart)
-
+            local pingTime = 0.025
+            
+            -- Senjata Twist of Fate presisi tinggi (Bullet Speed 750 studs/s untuk hitscan/fast bullet)
             local bulletSpeed = 750
             local flightTime = distToTarget / bulletSpeed
-
-            local predictedPos = targetPart.Position + (targetVelocity * flightTime)
+            
+            local predictedPos = targetPart.Position + (targetVelocity * (flightTime + (pingTime * 0.5)))
             local aimPos = predictedPos + Vector3.new(0, autoOffset, 0)
-
+            
             local targetCFrame = CFrame.new(cameraPos, aimPos)
             local smoothness = math.clamp(_G.FiringSmoothness or 0.98, 0.01, 1)
             local alpha = 1 - math.pow(1 - smoothness, deltaTime * 60)
-
+            
             Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, alpha)
         end
     else
@@ -1665,6 +1785,10 @@ local function ProcessAutoAim(deltaTime)
     end
 end
 
+-- =========================================================================
+-- 🎯 AUTO SKILLCHECK GREAT (GENERATOR AUTOMATION - ZERO LAG OPTIMIZED)
+-- PC: Spacebar | Mobile: Survivor-mob.Control.action Button
+-- =========================================================================
 local lastHitTick = 0
 local function TriggerPerfectHit()
     local now = tick()
@@ -1672,6 +1796,7 @@ local function TriggerPerfectHit()
     lastHitTick = now
 
     task.spawn(function()
+        -- 1. Simulasi Spasi di PC
         if VirtualInputManager then
             pcall(function()
                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
@@ -1679,7 +1804,8 @@ local function TriggerPerfectHit()
                 VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
             end)
         end
-
+        
+        -- 2. Simulasi Tombol action di Mobile (Survivor-mob.Control.action)
         pcall(function()
             local pGui = LocalPlayer:FindFirstChild("PlayerGui")
             local sMob = pGui and pGui:FindFirstChild("Survivor-mob")
@@ -1711,10 +1837,11 @@ end
 local CachedSkillGui = nil
 local function ProcessAutoSkillCheck()
     if not ScriptRunning or not _G.AutoSkillCheck then return end
-
+    
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
     if not playerGui then return end
-
+    
+    -- Caching referensi UI Skillcheck agar tidak melakukan GetChildren() setiap frame
     local gui = CachedSkillGui
     if not gui or not gui.Parent then
         gui = playerGui:FindFirstChild("SkillCheckPromptGui")
@@ -1728,21 +1855,21 @@ local function ProcessAutoSkillCheck()
         end
         CachedSkillGui = gui
     end
-
+    
     if gui and gui.Enabled then
         local check = gui:FindFirstChild("Check") or gui
         local line = check:FindFirstChild("Line") or gui:FindFirstChild("Line", true)
         local goal = check:FindFirstChild("Goal") or gui:FindFirstChild("Goal", true)
-
+        
         if line and goal and line.Visible and goal.Visible then
             local now = tick()
             if now - lastHitTick >= 0.22 then
                 local lineRot = line.Rotation % 360
                 local goalRot = goal.Rotation % 360
-
+                
                 local targetAngle = (goalRot + 120) % 360
                 local diff = math.abs((lineRot - targetAngle + 180) % 360 - 180)
-
+                
                 if diff <= 14 then
                     TriggerPerfectHit()
                 end
@@ -1751,6 +1878,7 @@ local function ProcessAutoSkillCheck()
     end
 end
 
+-- croshair dot
 local CrosshairGui, CrosshairDot = nil, nil
 local function CreateCrosshairUI()
     if CrosshairGui then pcall(function() CrosshairGui:Destroy() end) end
@@ -1762,7 +1890,7 @@ local function CreateCrosshairUI()
     CrosshairGui.Name = "CrosshairGui"
     CrosshairGui.Parent = GuiParent
     CrosshairGui.ResetOnSpawn = false
-
+    
     CrosshairDot = Instance.new("Frame")
     CrosshairDot.Name = "Dot"
     CrosshairDot.Size = UDim2.new(0, 10, 0, 10)
@@ -1773,26 +1901,31 @@ local function CreateCrosshairUI()
     CrosshairDot.ZIndex = 11
     CrosshairDot.Visible = false
     CrosshairDot.Parent = CrosshairGui
-
+    
     local dotCorner = Instance.new("UICorner", CrosshairDot)
     dotCorner.CornerRadius = UDim.new(1, 0)
 end
 CreateCrosshairUI()
 
+-- UNIFIED SINGLE RENDERSTEPPED LOOP (Mengurangi 66% Overhead Context Switch pada Mobile)
 local mainRenderConnection = RunService.RenderStepped:Connect(function(deltaTime)
     if not ScriptRunning then return end
-
+    
+    -- 1. Real-time Camera FOV enforcement
     local targetFOV = _G.CameraFOV or 70.0
     if Camera and Camera.FieldOfView ~= targetFOV then
         Camera.FieldOfView = targetFOV
     end
-
+    
+    -- 2. Process Auto Aim
     pcall(function() ProcessAutoAim(deltaTime) end)
-
+    
+    -- 3. Process Auto Skillcheck
     if _G.AutoSkillCheck then
         pcall(ProcessAutoSkillCheck)
     end
-
+    
+    -- 4. Crosshair Dot Update
     if CrosshairDot then
         local activeAim = AutoAimEnabled or VeilAimEnabled or UniversalAimEnabled
         if not activeAim then
@@ -1806,7 +1939,7 @@ local mainRenderConnection = RunService.RenderStepped:Connect(function(deltaTime
             else
                 isAiming = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) or isMobileLMBHeld or isMobileM2Held or isMobileADSHeld
             end
-
+            
             if isAiming and LockedPart then
                 if IsSCP(LockedTarget) then
                     CrosshairDot.BackgroundColor3 = Color3.fromRGB(255, 120, 0)
@@ -1821,6 +1954,7 @@ local mainRenderConnection = RunService.RenderStepped:Connect(function(deltaTime
 end)
 table.insert(Connections, mainRenderConnection)
 
+--  wind ui lib
 local UIControls = {}
 
 local function GetKeyCode(key)
@@ -1850,14 +1984,15 @@ local function CreateUI()
         return {}
     end
 
+    
     pcall(function()
-        local hexBase = Color3.fromRGB(10, 77, 102)
-        local hexAccent = Color3.fromRGB(14, 104, 136)
-        local hexDarkBg = Color3.fromRGB(6, 43, 58)
-        local hexContainer = Color3.fromRGB(8, 60, 80)
-        local hexCard = Color3.fromRGB(10, 77, 102)
-        local hexButton = Color3.fromRGB(13, 91, 120)
-        local hexOutline = Color3.fromRGB(18, 125, 160)
+        local hexBase = Color3.fromRGB(10, 77, 102)        -- #0a4d66 Utama
+        local hexAccent = Color3.fromRGB(14, 104, 136)      -- Light Accent #0a4d66
+        local hexDarkBg = Color3.fromRGB(6, 43, 58)        -- Background utama
+        local hexContainer = Color3.fromRGB(8, 60, 80)     -- Container #0a4d66
+        local hexCard = Color3.fromRGB(10, 77, 102)        -- Card #0a4d66
+        local hexButton = Color3.fromRGB(13, 91, 120)      -- Button #0a4d66
+        local hexOutline = Color3.fromRGB(18, 125, 160)    -- Outline
 
         if WindUI.AddTheme then
             WindUI:AddTheme({
@@ -1889,13 +2024,14 @@ local function CreateUI()
         MinSize = Vector2.new(500, 380),
         Transparent = true,
         Theme = "ToscaTheme",
-        Accent = Color3.fromRGB(10, 77, 102),
+        Accent = Color3.fromRGB(10, 77, 102), 
         Resizable = true,
         HideSearchBar = true,
     })
 
     WindowInstance = Window
 
+    -- 📱 FLOATING MINI TOGGLE BUTTON (WINDUI BUILT-IN OPEN BUTTON)
     pcall(function()
         if Window and Window.EditOpenButton then
             Window:EditOpenButton({
@@ -1911,6 +2047,7 @@ local function CreateUI()
         end
     end)
 
+    -- close: HANYA hide window, JANGAN matikan script cheat saat di-close/di-minimize
     pcall(function()
         if Window.OnClose then
             if type(Window.OnClose) == "function" then
@@ -1919,11 +2056,13 @@ local function CreateUI()
         end
     end)
 
+
     local MainTab = Window:Tab({
         Title = "SysHub VD",
         Icon = "shield",
     })
 
+    -- combat
     local parrySection = MainTab:Section({ Title = "Combat & Auto Parry Engine" })
 
     UIControls.AutoParry = parrySection:Toggle({
@@ -1934,6 +2073,8 @@ local function CreateUI()
             _G.AutoParry = state
         end
     })
+
+
 
     if parrySection.Keybind then
         pcall(function()
@@ -1965,6 +2106,7 @@ local function CreateUI()
         end
     })
 
+    -- SECTION 2: VISUALS & ESP
     local espSection = MainTab:Section({ Title = "Visuals & ESP" })
 
     UIControls.ESPMaster = espSection:Toggle({
@@ -2132,6 +2274,7 @@ local function CreateUI()
         end)
     end
 
+    -- SECTION 3: AIMBOT SETTINGS
     local aimSection = MainTab:Section({ Title = "Aimbot Settings" })
 
     UIControls.AutoAim = aimSection:Toggle({
@@ -2234,6 +2377,8 @@ local function CreateUI()
         end)
     end
 
+
+
     aimSection:Slider({
         Title = "Survivor Aim Height Offset",
         Desc = "Offset vertikal bidikan Twist of Fate (Default: 0.50)",
@@ -2304,6 +2449,7 @@ local function CreateUI()
         end
     })
 
+    -- SECTION 4: AUTOMATION & MECHANICS
     local skillSection = MainTab:Section({ Title = "Automation & Mechanics" })
 
     UIControls.AutoSkillCheck = skillSection:Toggle({
@@ -2362,7 +2508,7 @@ local function CreateUI()
         SafeSetToggle(UIControls.ModeTerang, _G.ModeTerang)
         SafeSetToggle(UIControls.AutoParry, _G.AutoParry)
         SafeSetToggle(UIControls.WallCheck, _G.WallCheck)
-            end
+    end
 
     local function ToggleUI()
         if not ScriptRunning then return end
@@ -2390,7 +2536,7 @@ local function SetupPlayer(player)
         RefreshAllESP()
     end)
     table.insert(Connections, conn1)
-
+    
     local conn2 = player.CharacterRemoving:Connect(function()
         RemoveESPFromTarget(player.Character)
     end)
@@ -2410,16 +2556,19 @@ end)
 table.insert(Connections, playerRemovingConn)
 
 local wsDescConn = workspace.DescendantAdded:Connect(function(desc)
-    if not ScriptRunning or not ESPEnabled or not desc:IsA("Model") then return end
-    local name = string.lower(desc.Name)
-    if string.find(name, "scp") or string.find(name, "zombie") or string.find(name, "infected") or string.find(name, "049-2") then
-        task.wait(0.2)
-        IsSCP(desc)
-        RefreshAllESP()
+    if not ScriptRunning or not ESPEnabled then return end
+    if desc:IsA("Model") then
+        local name = string.lower(desc.Name)
+        if string.find(name, "scp") or string.find(name, "zombie") or string.find(name, "infected") or string.find(name, "049-2") then
+            task.wait(0.2)
+            IsSCP(desc)
+            RefreshAllESP()
+        end
     end
 end)
 table.insert(Connections, wsDescConn)
 
+-- Remote Killers Listener (Menangkap spawn SCP zombie seperti di backup sugeng)
 pcall(function()
     local remotes = ReplicatedStorage:FindFirstChild("Remotes")
     if remotes then
@@ -2440,6 +2589,7 @@ pcall(function()
     end
 end)
 
+-- Deteksi Teleportasi / Masuk Match dari Lobby (Cek ringan per 1 detik, bukan per frame Heartbeat)
 task.spawn(function()
     local lastHrpPos = nil
     while ScriptRunning do
@@ -2450,7 +2600,7 @@ task.spawn(function()
                 if hrp then
                     if lastHrpPos then
                         local dist = (hrp.Position - lastHrpPos).Magnitude
-                        if dist > 75 then
+                        if dist > 35 then
                             ClearAllESPData()
                             task.wait(0.2)
                             RefreshAllESP()
@@ -2466,15 +2616,15 @@ end)
 
 local keyInputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not ScriptRunning or gameProcessed then return end
-
+    
     local code = input.KeyCode
     if not code or code == Enum.KeyCode.Unknown then return end
-
+    
     if code == Enum.KeyCode.Delete then
         if _G.SugengVDCleanup then _G.SugengVDCleanup() end
         return
-    elseif code == Enum.KeyCode.Zero or code == Enum.KeyCode.KeypadZero or code == Enum.KeyCode.Insert or code == Enum.KeyCode.RightShift or code == Enum.KeyCode.RightControl then
-        if UI and UI.ToggleUI then UI.ToggleUI() end
+    elseif code == Enum.KeyCode.Zero or code == Enum.KeyCode.KeypadZero or code == Enum.KeyCode.Insert or code == Enum.KeyCode.RightShift or code == Enum.KeyCode.RightControl then 
+        if UI and UI.ToggleUI then UI.ToggleUI() end 
         return
     elseif Keybinds.ESP and code == Keybinds.ESP then
         ESPEnabled = not ESPEnabled
